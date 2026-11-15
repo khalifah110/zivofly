@@ -437,7 +437,7 @@ export async function getSupabaseProfile(userId?: string): Promise<User | null> 
               id: authUser.id,
               email: fallbackUser.email,
               full_name: fallbackUser.name,
-              business_name: fallbackUser.businessName || '',
+              business_name: fallbackUser.businessName || 'My Business',
               avatar_url: fallbackUser.avatarUrl || null,
               updated_at: new Date().toISOString(),
             },
