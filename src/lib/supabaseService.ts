@@ -9,6 +9,9 @@ import {
   GoogleWorkspaceConfig,
   GoogleWorkspaceIntegrationStatus,
   GoogleWorkspaceServiceIdentifier,
+  GoogleAuthorizedResource,
+  GoogleSelectedResourcesResult,
+  GooglePickerTokenPayload,
 } from '../types';
 import { isCorruptedDocxText } from './fileTextExtractor';
 
@@ -3138,6 +3141,9 @@ export const GOOGLE_OAUTH_RETURN_STORAGE_KEY = 'zivofly_google_oauth_return';
 // Guard to prevent duplicate concurrent OAuth start requests
 const inFlightGoogleOAuthServices = new Set<string>();
 
+// Guard to prevent duplicate concurrent disconnect requests
+const inFlightGoogleDisconnectIds = new Set<string>();
+
 // Guard to ensure an OAuth callback query string is processed only once per redirect
 let lastProcessedGoogleOAuthQuery: string | null = null;
 
@@ -3419,7 +3425,7 @@ export function syncGoogleWorkspaceConfigWithRecords(
     serviceKey: GoogleWorkspaceServiceIdentifier
   ): NonNullable<GoogleWorkspaceConfig['gmail']> => {
     const rec = connectionsByService[serviceKey];
-    if (!rec) {
+    if (!rec || rec.status === 'disconnected') {
       return {
         enabled: false,
         status: 'disconnected',
@@ -3441,6 +3447,7 @@ export function syncGoogleWorkspaceConfigWithRecords(
   };
 
   const sheetsRecord = connectionsByService.google_sheets_service;
+  const isSheetsDisconnected = !sheetsRecord || sheetsRecord.status === 'disconnected';
   const existingSheets = currentConfig?.sheets || {
     enabled: false,
     columns: [],
@@ -3449,20 +3456,30 @@ export function syncGoogleWorkspaceConfigWithRecords(
 
   return {
     gmail: buildAppEntry('gmail'),
-    drive: buildAppEntry('google_drive'),
+    drive: {
+      ...buildAppEntry('google_drive'),
+      selectedResourceIds:
+        connectionsByService.google_drive &&
+        connectionsByService.google_drive.status !== 'disconnected'
+          ? currentConfig?.drive?.selectedResourceIds
+          : undefined,
+    },
     docs: buildAppEntry('google_docs'),
     sheets: {
       ...existingSheets,
       enabled: sheetsRecord?.status === 'connected',
       status: sheetsRecord ? sheetsRecord.status : 'disconnected',
-      accountEmail: sheetsRecord?.account_email || undefined,
-      connectionId: sheetsRecord?.id,
-      lastError: sheetsRecord?.last_error || null,
-      connectedAt: sheetsRecord?.created_at,
-      lastSyncedAt:
-        sheetsRecord?.last_synced_at ||
-        sheetsRecord?.updated_at ||
-        existingSheets.lastSyncedAt,
+      accountEmail: isSheetsDisconnected
+        ? undefined
+        : sheetsRecord?.account_email || undefined,
+      connectionId: isSheetsDisconnected ? undefined : sheetsRecord?.id,
+      lastError: isSheetsDisconnected ? null : sheetsRecord?.last_error || null,
+      connectedAt: isSheetsDisconnected ? undefined : sheetsRecord?.created_at,
+      lastSyncedAt: isSheetsDisconnected
+        ? existingSheets.lastSyncedAt
+        : sheetsRecord?.last_synced_at ||
+          sheetsRecord?.updated_at ||
+          existingSheets.lastSyncedAt,
     },
     calendar: buildAppEntry('google_calendar'),
   };
@@ -3510,6 +3527,7 @@ async function buildGoogleWorkspaceEdgeDiagnostic(params: {
   service: string;
   hasAuthenticatedSession: boolean;
   workspaceId: string | null;
+  operation?: 'connect' | 'disconnect';
 }): Promise<GoogleWorkspaceOAuthDiagnostic> {
   const {
     error,
@@ -3518,6 +3536,7 @@ async function buildGoogleWorkspaceEdgeDiagnostic(params: {
     service,
     hasAuthenticatedSession,
     workspaceId,
+    operation = 'connect',
   } = params;
 
   const functionEndpoint = `${SUPABASE_URL}/functions/v1/google_workspace`;
@@ -3603,6 +3622,9 @@ async function buildGoogleWorkspaceEdgeDiagnostic(params: {
     serverDetail = responseBody;
   }
 
+  const verb = operation === 'disconnect' ? 'disconnect' : 'connect';
+  const actionNoun = operation === 'disconnect' ? 'disconnection' : 'authorization';
+
   let userFacingMessage = '';
   const isNetworkOrCorsFailure =
     errorName === 'FunctionsFetchError' ||
@@ -3610,9 +3632,9 @@ async function buildGoogleWorkspaceEdgeDiagnostic(params: {
     rawErrorMessage.includes('Failed to fetch');
 
   if (!hasAuthenticatedSession) {
-    userFacingMessage = `Cannot connect ${serviceLabel}: No active authenticated session found. Please sign in and try again.`;
+    userFacingMessage = `Cannot ${verb} ${serviceLabel}: No active authenticated session found. Please sign in and try again.`;
   } else if (!hasResolvedWorkspaceId) {
-    userFacingMessage = `Cannot connect ${serviceLabel}: Could not resolve an active workspace ID for your account.`;
+    userFacingMessage = `Cannot ${verb} ${serviceLabel}: Could not resolve an active workspace ID for your account.`;
   } else if (isNetworkOrCorsFailure) {
     const underlyingCause =
       typeof (errorContextSummary as any)?.message === 'string'
@@ -3628,13 +3650,13 @@ async function buildGoogleWorkspaceEdgeDiagnostic(params: {
       userFacingMessage = `Failed to reach google_workspace for ${serviceLabel} at ${functionEndpoint} (${underlyingCause}). Check browser network/CORS preflight headers (authorization, apikey, content-type, x-client-info).`;
     }
   } else if (httpStatus && serverDetail) {
-    userFacingMessage = `${serviceLabel} authorization failed (HTTP ${httpStatus}): ${serverDetail}`;
+    userFacingMessage = `${serviceLabel} ${actionNoun} failed (HTTP ${httpStatus}): ${serverDetail}`;
   } else if (serverDetail) {
-    userFacingMessage = `${serviceLabel} authorization failed: ${serverDetail}`;
+    userFacingMessage = `${serviceLabel} ${actionNoun} failed: ${serverDetail}`;
   } else if (httpStatus) {
-    userFacingMessage = `${serviceLabel} authorization failed with HTTP ${httpStatus}: ${rawErrorMessage}`;
+    userFacingMessage = `${serviceLabel} ${actionNoun} failed with HTTP ${httpStatus}: ${rawErrorMessage}`;
   } else {
-    userFacingMessage = `${serviceLabel} authorization failed: ${rawErrorMessage}`;
+    userFacingMessage = `${serviceLabel} ${actionNoun} failed: ${rawErrorMessage}`;
   }
 
   const diagnostic: GoogleWorkspaceOAuthDiagnostic = {
@@ -3857,6 +3879,903 @@ export async function startGoogleWorkspaceOAuth(params: {
   } finally {
     inFlightGoogleOAuthServices.delete(service);
   }
+}
+
+function mapGoogleWorkspaceDisconnectError(params: {
+  diag: GoogleWorkspaceOAuthDiagnostic;
+  serviceLabel: string;
+}): string {
+  const { diag, serviceLabel } = params;
+  const status = diag.httpStatus;
+  const combined = [
+    diag.userFacingMessage,
+    diag.errorMessage,
+    typeof diag.responseBody === 'object' && diag.responseBody
+      ? JSON.stringify(diag.responseBody)
+      : String(diag.responseBody || ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    !diag.hasAuthenticatedSession ||
+    status === 401 ||
+    combined.includes('frontend_session') ||
+    combined.includes('auth_token_expired') ||
+    combined.includes('invalid_user_jwt') ||
+    combined.includes('authentication required') ||
+    combined.includes('jwt expired') ||
+    combined.includes('session has expired')
+  ) {
+    return `Your Supabase session has expired or is not authenticated. Please sign in again to disconnect ${serviceLabel}.`;
+  }
+
+  if (!diag.hasResolvedWorkspaceId) {
+    return `Cannot disconnect ${serviceLabel}: Active workspace ID is missing or could not be verified.`;
+  }
+
+  if (
+    status === 403 ||
+    combined.includes('insufficient') ||
+    combined.includes('permission') ||
+    combined.includes('forbidden') ||
+    combined.includes('not an owner') ||
+    combined.includes('not authorized')
+  ) {
+    return `Insufficient workspace permissions to disconnect ${serviceLabel}. Only workspace owners or administrators can disconnect integrations.`;
+  }
+
+  if (
+    status === 404 ||
+    combined.includes('integration not found') ||
+    combined.includes('connection not found') ||
+    combined.includes('not found')
+  ) {
+    return `${serviceLabel} integration was not found or has already been removed.`;
+  }
+
+  if (combined.includes('revoke') || combined.includes('revocation')) {
+    return `Google authorization revocation failed while disconnecting ${serviceLabel}: ${diag.userFacingMessage}`;
+  }
+
+  if (combined.includes('token') && (combined.includes('delete') || combined.includes('remove'))) {
+    return `Failed to delete stored Google OAuth tokens for ${serviceLabel}: ${diag.userFacingMessage}`;
+  }
+
+  return diag.userFacingMessage;
+}
+
+/**
+ * Disconnects a single Google Workspace integration via the deployed `google_workspace` Edge Function (`action: "disconnect"`),
+ * then refreshes the full integration list from `public.integration_connections` so UI matches database truth.
+ */
+export async function disconnectGoogleWorkspaceIntegration(params: {
+  service: GoogleWorkspaceServiceIdentifier;
+  connectionId: string;
+  workspaceId?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  workspaceId: string;
+  service: GoogleWorkspaceServiceIdentifier;
+  connectionId: string;
+  connectionsByService: Record<
+    GoogleWorkspaceServiceIdentifier,
+    GoogleIntegrationConnectionRecord | null
+  >;
+  message: string;
+}> {
+  if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    const configErr = new Error(
+      'Supabase client is not configured (missing project URL or anon key).'
+    );
+    await buildGoogleWorkspaceEdgeDiagnostic({
+      error: configErr,
+      service: params.service,
+      hasAuthenticatedSession: false,
+      workspaceId: params.workspaceId || null,
+      operation: 'disconnect',
+    });
+    throw configErr;
+  }
+
+  if (!isGoogleWorkspaceServiceIdentifier(params.service)) {
+    throw new Error(
+      `Invalid Google Workspace service identifier: "${params.service}".`
+    );
+  }
+
+  const service = params.service;
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+  const normalizedConnectionId =
+    typeof params.connectionId === 'string' ? params.connectionId.trim() : '';
+
+  if (!isValidUuid(normalizedConnectionId)) {
+    throw new Error(
+      `Cannot disconnect ${serviceLabel}: Missing or invalid integration connection ID.`
+    );
+  }
+
+  if (inFlightGoogleDisconnectIds.has(normalizedConnectionId)) {
+    throw new Error(
+      `Disconnection for ${serviceLabel} is already in progress. Please wait.`
+    );
+  }
+
+  inFlightGoogleDisconnectIds.add(normalizedConnectionId);
+
+  let hasAuthenticatedSession = false;
+  let resolvedWorkspaceId: string | null = null;
+
+  try {
+    // 1. Verify authenticated Supabase session & active workspace ID
+    try {
+      const resolved = await resolveActiveGoogleWorkspaceId({
+        workspaceId: params.workspaceId,
+        agentId: params.agentId,
+      });
+      hasAuthenticatedSession = Boolean(resolved.accessToken);
+      resolvedWorkspaceId = resolved.workspaceId;
+    } catch (preCheckErr: any) {
+      const { data: sessionCheck } = await supabase.auth
+        .getSession()
+        .catch(() => ({ data: { session: null } }));
+      hasAuthenticatedSession = Boolean(sessionCheck?.session?.access_token);
+
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error: preCheckErr,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId || params.workspaceId || null,
+        operation: 'disconnect',
+      });
+      throw new Error(
+        mapGoogleWorkspaceDisconnectError({ diag, serviceLabel })
+      );
+    }
+
+    if (!isValidUuid(resolvedWorkspaceId)) {
+      const missingWsErr = new Error(
+        'A valid active workspace ID is required to disconnect Google Workspace.'
+      );
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error: missingWsErr,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId,
+        operation: 'disconnect',
+      });
+      throw new Error(
+        mapGoogleWorkspaceDisconnectError({ diag, serviceLabel })
+      );
+    }
+
+    // 2. Invoke deployed `google_workspace` Edge Function (`action: "disconnect"`)
+    const { data, error, response } = await supabase.functions.invoke(
+      'google_workspace',
+      {
+        body: {
+          action: 'disconnect',
+          workspace_id: resolvedWorkspaceId,
+          connection_id: normalizedConnectionId,
+        },
+      }
+    );
+
+    if (error) {
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error,
+        response,
+        data,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId,
+        operation: 'disconnect',
+      });
+      throw new Error(
+        mapGoogleWorkspaceDisconnectError({ diag, serviceLabel })
+      );
+    }
+
+    if (!data || typeof data !== 'object') {
+      const unexpectedErr = new Error(
+        `Unexpected backend response received when disconnecting ${serviceLabel}.`
+      );
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error: unexpectedErr,
+        response,
+        data,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId,
+        operation: 'disconnect',
+      });
+      throw new Error(diag.userFacingMessage);
+    }
+
+    if (data.error || data.success === false || data.ok === false) {
+      const serverErrMsg =
+        typeof data.error === 'string'
+          ? data.error
+          : typeof data.message === 'string'
+          ? data.message
+          : typeof data.reason === 'string'
+          ? data.reason
+          : data.error
+          ? JSON.stringify(data.error)
+          : `Failed to disconnect ${serviceLabel}.`;
+      const payloadErr = new Error(serverErrMsg);
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error: payloadErr,
+        response,
+        data,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId,
+        operation: 'disconnect',
+      });
+      throw new Error(
+        mapGoogleWorkspaceDisconnectError({ diag, serviceLabel })
+      );
+    }
+
+    const returnedStatus =
+      typeof data.status === 'string'
+        ? data.status.trim().toLowerCase()
+        : typeof data.connection?.status === 'string'
+        ? data.connection.status.trim().toLowerCase()
+        : '';
+
+    const isConfirmedSuccess =
+      data.success === true ||
+      data.ok === true ||
+      data.disconnected === true ||
+      returnedStatus === 'disconnected' ||
+      (typeof data.connection_id === 'string' &&
+        data.connection_id.trim() === normalizedConnectionId) ||
+      (typeof data.id === 'string' && data.id.trim() === normalizedConnectionId);
+
+    if (!isConfirmedSuccess) {
+      const unconfirmedErr = new Error(
+        `Unexpected response from google_workspace: disconnection of ${serviceLabel} was not confirmed.`
+      );
+      const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+        error: unconfirmedErr,
+        response,
+        data,
+        service,
+        hasAuthenticatedSession,
+        workspaceId: resolvedWorkspaceId,
+        operation: 'disconnect',
+      });
+      throw new Error(diag.userFacingMessage);
+    }
+
+    // 3. Re-query `public.integration_connections` so all 5 cards reflect true database state
+    const refreshed = await getGoogleWorkspaceIntegrationConnections({
+      workspaceId: resolvedWorkspaceId,
+      agentId: params.agentId,
+    });
+
+    const refreshedRecord = refreshed.connectionsByService[service];
+    if (refreshedRecord && refreshedRecord.status === 'connected') {
+      throw new Error(
+        `${serviceLabel} is still marked as connected in the database after disconnection.`
+      );
+    }
+
+    return {
+      workspaceId: refreshed.workspaceId,
+      service,
+      connectionId: normalizedConnectionId,
+      connectionsByService: refreshed.connectionsByService,
+      message:
+        typeof data.message === 'string' && data.message.trim()
+          ? data.message.trim()
+          : `Disconnected ${serviceLabel} successfully.`,
+    };
+  } finally {
+    inFlightGoogleDisconnectIds.delete(normalizedConnectionId);
+  }
+}
+
+// ==========================================
+// GOOGLE DRIVE RESOURCE SELECTION METHODS
+// ==========================================
+
+const inFlightResourceSaveKeys = new Set<string>();
+const inFlightResourceRemoveIds = new Set<string>();
+
+function deriveResourceTypeLabel(mimeType: string, rawType?: string | null): string {
+  if (typeof rawType === 'string' && rawType.trim().length > 0) {
+    return rawType.trim();
+  }
+  const m = (mimeType || '').toLowerCase();
+  if (m === 'application/vnd.google-apps.document') return 'Google Doc';
+  if (m === 'application/vnd.google-apps.spreadsheet') return 'Google Sheet';
+  if (m === 'application/vnd.google-apps.presentation') return 'Google Slides';
+  if (m === 'application/vnd.google-apps.folder') return 'Folder';
+  if (m === 'application/pdf') return 'PDF';
+  if (m.startsWith('image/')) return 'Image';
+  if (m.startsWith('video/')) return 'Video';
+  if (
+    m === 'application/zip' ||
+    m === 'application/x-zip-compressed' ||
+    m === 'application/x-rar-compressed' ||
+    m === 'application/x-7z-compressed' ||
+    m === 'application/gzip'
+  ) {
+    return 'Archive';
+  }
+  return 'File';
+}
+
+function mapAuthorizedResourceRow(
+  row: any,
+  fallbackWorkspaceId: string,
+  fallbackConnectionId: string
+): GoogleAuthorizedResource | null {
+  if (!row || typeof row !== 'object') return null;
+
+  const id = typeof row.id === 'string' ? row.id.trim() : '';
+  const googleFileId =
+    typeof row.google_file_id === 'string'
+      ? row.google_file_id.trim()
+      : typeof row.file_id === 'string'
+      ? row.file_id.trim()
+      : typeof row.external_file_id === 'string'
+      ? row.external_file_id.trim()
+      : '';
+
+  if (!id || !googleFileId) return null;
+
+  const mimeType =
+    typeof row.mime_type === 'string'
+      ? row.mime_type.trim()
+      : typeof row.mimeType === 'string'
+      ? row.mimeType.trim()
+      : '';
+
+  const webViewLinkRaw =
+    typeof row.web_view_link === 'string'
+      ? row.web_view_link.trim()
+      : typeof row.webViewLink === 'string'
+      ? row.webViewLink.trim()
+      : typeof row.url === 'string'
+      ? row.url.trim()
+      : '';
+
+  const webViewLink =
+    webViewLinkRaw &&
+    (webViewLinkRaw.startsWith('https://') || webViewLinkRaw.startsWith('http://'))
+      ? webViewLinkRaw
+      : null;
+
+  const createdAt =
+    typeof row.created_at === 'string' && row.created_at.trim()
+      ? row.created_at.trim()
+      : new Date().toISOString();
+
+  const selectedAt =
+    typeof row.selected_at === 'string' && row.selected_at.trim()
+      ? row.selected_at.trim()
+      : typeof row.authorized_at === 'string' && row.authorized_at.trim()
+      ? row.authorized_at.trim()
+      : createdAt;
+
+  return {
+    id,
+    workspace_id:
+      typeof row.workspace_id === 'string' && row.workspace_id.trim()
+        ? row.workspace_id.trim()
+        : fallbackWorkspaceId,
+    connection_id:
+      typeof row.connection_id === 'string' && row.connection_id.trim()
+        ? row.connection_id.trim()
+        : fallbackConnectionId,
+    google_file_id: googleFileId,
+    name:
+      typeof row.name === 'string' && row.name.trim()
+        ? row.name.trim()
+        : typeof row.file_name === 'string' && row.file_name.trim()
+        ? row.file_name.trim()
+        : typeof row.title === 'string' && row.title.trim()
+        ? row.title.trim()
+        : 'Untitled file',
+    mime_type: mimeType,
+    resource_type: deriveResourceTypeLabel(
+      mimeType,
+      row.resource_type || row.type || null
+    ),
+    web_view_link: webViewLink,
+    icon_link:
+      typeof row.icon_link === 'string' && row.icon_link.trim()
+        ? row.icon_link.trim()
+        : null,
+    status:
+      typeof row.status === 'string' && row.status.trim()
+        ? row.status.trim().toLowerCase()
+        : 'active',
+    selected_at: selectedAt,
+    created_at: createdAt,
+    updated_at:
+      typeof row.updated_at === 'string' && row.updated_at.trim()
+        ? row.updated_at.trim()
+        : undefined,
+  };
+}
+
+function mapGoogleResourceErrorMessage(diag: GoogleWorkspaceOAuthDiagnostic): string {
+  const status = diag.httpStatus;
+  const combined = [
+    diag.userFacingMessage,
+    diag.errorMessage,
+    typeof diag.responseBody === 'object' && diag.responseBody
+      ? JSON.stringify(diag.responseBody)
+      : String(diag.responseBody || ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    !diag.hasAuthenticatedSession ||
+    combined.includes('frontend_session') ||
+    combined.includes('auth_token_expired') ||
+    combined.includes('invalid_user_jwt') ||
+    combined.includes('authentication required')
+  ) {
+    return 'Your Zivofly login session has expired. Please sign in again and retry.';
+  }
+
+  if (
+    combined.includes('reauth') ||
+    combined.includes('reconnect') ||
+    combined.includes('google') && combined.includes('expired') ||
+    combined.includes('invalid_grant') ||
+    combined.includes('refresh token') ||
+    combined.includes('token expired')
+  ) {
+    return 'Your Google Drive authorization has expired. Please reconnect Google Drive to select or manage files.';
+  }
+
+  if (
+    status === 403 ||
+    combined.includes('insufficient') ||
+    combined.includes('permission') ||
+    combined.includes('forbidden')
+  ) {
+    return 'Google account or workspace permission was denied. Check your workspace role and Google Drive permissions.';
+  }
+
+  if (status === 404 || combined.includes('not found')) {
+    return 'The requested Google Drive connection or resource was not found.';
+  }
+
+  return diag.userFacingMessage;
+}
+
+async function invokeGoogleWorkspaceResourceAction(params: {
+  action:
+    | 'picker_token'
+    | 'list_selected_resources'
+    | 'save_selected_resources'
+    | 'remove_selected_resource'
+    | 'authorize_selected_resource';
+  workspaceId?: string | null;
+  connectionId: string;
+  agentId?: string | null;
+  extraBody?: Record<string, any>;
+}): Promise<{ data: any; workspaceId: string; connectionId: string }> {
+  if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    const configErr = new Error(
+      'Supabase client is not configured (missing project URL or anon key).'
+    );
+    await buildGoogleWorkspaceEdgeDiagnostic({
+      error: configErr,
+      service: 'google_drive',
+      hasAuthenticatedSession: false,
+      workspaceId: params.workspaceId || null,
+    });
+    throw configErr;
+  }
+
+  const normalizedConnectionId =
+    typeof params.connectionId === 'string' ? params.connectionId.trim() : '';
+
+  if (!isValidUuid(normalizedConnectionId)) {
+    throw new Error(
+      'Missing or invalid Google Drive connection ID. Connect Google Drive first.'
+    );
+  }
+
+  let hasAuthenticatedSession = false;
+  let resolvedWorkspaceId: string | null = null;
+
+  try {
+    const resolved = await resolveActiveGoogleWorkspaceId({
+      workspaceId: params.workspaceId,
+      agentId: params.agentId,
+    });
+    hasAuthenticatedSession = Boolean(resolved.accessToken);
+    resolvedWorkspaceId = resolved.workspaceId;
+  } catch (preErr: any) {
+    const { data: sessionCheck } = await supabase.auth
+      .getSession()
+      .catch(() => ({ data: { session: null } }));
+    hasAuthenticatedSession = Boolean(sessionCheck?.session?.access_token);
+
+    const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+      error: preErr,
+      service: 'google_drive',
+      hasAuthenticatedSession,
+      workspaceId: resolvedWorkspaceId || params.workspaceId || null,
+    });
+    throw new Error(mapGoogleResourceErrorMessage(diag));
+  }
+
+  if (!isValidUuid(resolvedWorkspaceId)) {
+    throw new Error('Could not resolve a valid active workspace ID.');
+  }
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'google_workspace',
+    {
+      body: {
+        action: params.action,
+        workspace_id: resolvedWorkspaceId,
+        connection_id: normalizedConnectionId,
+        ...(params.extraBody || {}),
+      },
+    }
+  );
+
+  if (error) {
+    const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+      error,
+      response,
+      data,
+      service: 'google_drive',
+      hasAuthenticatedSession,
+      workspaceId: resolvedWorkspaceId,
+    });
+    throw new Error(mapGoogleResourceErrorMessage(diag));
+  }
+
+  if (!data || typeof data !== 'object') {
+    const unexpectedErr = new Error(
+      `Unexpected response from google_workspace for action "${params.action}".`
+    );
+    const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+      error: unexpectedErr,
+      response,
+      data,
+      service: 'google_drive',
+      hasAuthenticatedSession,
+      workspaceId: resolvedWorkspaceId,
+    });
+    throw new Error(diag.userFacingMessage);
+  }
+
+  if (data.error || data.success === false || data.ok === false) {
+    const errMsg =
+      typeof data.error === 'string'
+        ? data.error
+        : typeof data.message === 'string'
+        ? data.message
+        : typeof data.reason === 'string'
+        ? data.reason
+        : data.error
+        ? JSON.stringify(data.error)
+        : `Google Workspace request (${params.action}) failed.`;
+    const payloadErr = new Error(errMsg);
+    const diag = await buildGoogleWorkspaceEdgeDiagnostic({
+      error: payloadErr,
+      response,
+      data,
+      service: 'google_drive',
+      hasAuthenticatedSession,
+      workspaceId: resolvedWorkspaceId,
+    });
+    throw new Error(mapGoogleResourceErrorMessage(diag));
+  }
+
+  return {
+    data,
+    workspaceId: resolvedWorkspaceId,
+    connectionId: normalizedConnectionId,
+  };
+}
+
+/**
+ * Retrieves a short-lived Google OAuth access token from `google_workspace` (`action: "picker_token"`).
+ * Never persists the access token to browser storage.
+ */
+export async function getGooglePickerToken(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  agentId?: string | null;
+}): Promise<GooglePickerTokenPayload> {
+  const { data, connectionId: normalizedConnectionId } =
+    await invokeGoogleWorkspaceResourceAction({
+      action: 'picker_token',
+      workspaceId: params.workspaceId,
+      connectionId: params.connectionId,
+      agentId: params.agentId,
+    });
+
+  const accessToken =
+    typeof data.access_token === 'string'
+      ? data.access_token.trim()
+      : typeof data.token === 'string'
+      ? data.token.trim()
+      : typeof data.accessToken === 'string'
+      ? data.accessToken.trim()
+      : '';
+
+  if (!accessToken) {
+    throw new Error(
+      'Backend did not return a short-lived Google Picker access token. Your Google authorization may need to be reconnected.'
+    );
+  }
+
+  const returnedConnectionId =
+    typeof data.connection_id === 'string' && data.connection_id.trim()
+      ? data.connection_id.trim()
+      : null;
+
+  if (
+    returnedConnectionId &&
+    returnedConnectionId !== normalizedConnectionId
+  ) {
+    throw new Error(
+      'Google Picker token connection mismatch. Please refresh Google Workspace integrations and try again.'
+    );
+  }
+
+  const rawAppId =
+    data.app_id ??
+    data.project_number ??
+    data.google_project_number ??
+    data.google_app_id;
+
+  const rawScope = Array.isArray(data.scopes)
+    ? data.scopes.join(' ')
+    : typeof data.scope === 'string'
+    ? data.scope.trim()
+    : null;
+
+  return {
+    accessToken,
+    expiresAt:
+      typeof data.expires_at === 'string' ? data.expires_at.trim() : null,
+    expiresIn: typeof data.expires_in === 'number' ? data.expires_in : null,
+    apiKey:
+      typeof data.api_key === 'string'
+        ? data.api_key.trim()
+        : typeof data.picker_api_key === 'string'
+        ? data.picker_api_key.trim()
+        : typeof data.developer_key === 'string'
+        ? data.developer_key.trim()
+        : null,
+    clientId:
+      typeof data.client_id === 'string'
+        ? data.client_id.trim()
+        : typeof data.oauth_client_id === 'string'
+        ? data.oauth_client_id.trim()
+        : null,
+    appId:
+      typeof rawAppId === 'string' || typeof rawAppId === 'number'
+        ? String(rawAppId).trim()
+        : null,
+    accountEmail:
+      typeof data.account_email === 'string'
+        ? data.account_email.trim()
+        : typeof data.email === 'string'
+        ? data.email.trim()
+        : null,
+    scope: rawScope,
+    connectionId: returnedConnectionId || normalizedConnectionId,
+  };
+}
+
+/**
+ * Lists authorized Google Drive resources for the active workspace and Google Drive connection
+ * via `google_workspace` (`action: "list_selected_resources"`).
+ */
+export async function getGoogleSelectedResources(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  agentId?: string | null;
+}): Promise<GoogleSelectedResourcesResult> {
+  const { data, workspaceId, connectionId } =
+    await invokeGoogleWorkspaceResourceAction({
+      action: 'list_selected_resources',
+      workspaceId: params.workspaceId,
+      connectionId: params.connectionId,
+      agentId: params.agentId,
+    });
+
+  const rawList = Array.isArray(data.resources) ? data.resources : [];
+  const resources: GoogleAuthorizedResource[] = rawList
+    .map((item: any) => mapAuthorizedResourceRow(item, workspaceId, connectionId))
+    .filter((item: GoogleAuthorizedResource | null): item is GoogleAuthorizedResource =>
+      Boolean(item)
+    );
+
+  const activeCount = resources.filter(
+    (r) => !r.status || r.status === 'active'
+  ).length;
+  const selectedCount =
+    typeof data.selected_count === 'number'
+      ? data.selected_count
+      : resources.length;
+  const selectionRequired =
+    typeof data.selection_required === 'boolean'
+      ? data.selection_required
+      : activeCount === 0;
+
+  return {
+    workspaceId,
+    connectionId,
+    resources,
+    selectedCount,
+    activeCount,
+    selectionRequired,
+  };
+}
+
+/**
+ * Saves customer-selected Google Drive file IDs via `google_workspace` (`action: "save_selected_resources"`).
+ * Sends only `google_file_id` so the backend verifies real file metadata with Google Drive before persisting.
+ */
+export async function saveGoogleSelectedResources(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  selectedFiles: Array<{ id: string }>;
+  agentId?: string | null;
+}): Promise<{
+  workspaceId: string;
+  connectionId: string;
+  savedCount: number;
+  message: string;
+}> {
+  const uniqueIds = Array.from(
+    new Set(
+      (params.selectedFiles || [])
+        .map((f) => (typeof f?.id === 'string' ? f.id.trim() : ''))
+        .filter(Boolean)
+    )
+  );
+
+  if (uniqueIds.length === 0) {
+    throw new Error('Please select at least one file to authorize.');
+  }
+
+  const saveLockKey = `${params.connectionId}:${uniqueIds.join(',')}`;
+  if (inFlightResourceSaveKeys.has(saveLockKey)) {
+    throw new Error('Saving selected resources is already in progress.');
+  }
+
+  inFlightResourceSaveKeys.add(saveLockKey);
+  try {
+    const { data, workspaceId, connectionId } =
+      await invokeGoogleWorkspaceResourceAction({
+        action: 'save_selected_resources',
+        workspaceId: params.workspaceId,
+        connectionId: params.connectionId,
+        agentId: params.agentId,
+        extraBody: {
+          resources: uniqueIds.map((fileId) => ({
+            google_file_id: fileId,
+          })),
+        },
+      });
+
+    const savedCount =
+      typeof data.saved_count === 'number'
+        ? data.saved_count
+        : Array.isArray(data.resources)
+        ? data.resources.length
+        : uniqueIds.length;
+
+    return {
+      workspaceId,
+      connectionId,
+      savedCount,
+      message:
+        typeof data.message === 'string' && data.message.trim()
+          ? data.message.trim()
+          : `Authorized ${savedCount} Google Drive ${
+              savedCount === 1 ? 'resource' : 'resources'
+            } successfully.`,
+    };
+  } finally {
+    inFlightResourceSaveKeys.delete(saveLockKey);
+  }
+}
+
+/**
+ * Revokes Zivofly's authorization for an individual Google Drive resource
+ * via `google_workspace` (`action: "remove_selected_resource"`).
+ * Does not delete the underlying Google Drive file.
+ */
+export async function removeGoogleSelectedResource(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  resourceId: string;
+  agentId?: string | null;
+}): Promise<{
+  workspaceId: string;
+  connectionId: string;
+  resourceId: string;
+  message: string;
+}> {
+  const normalizedResourceId =
+    typeof params.resourceId === 'string' ? params.resourceId.trim() : '';
+
+  if (!normalizedResourceId) {
+    throw new Error('Missing resource ID to remove.');
+  }
+
+  if (inFlightResourceRemoveIds.has(normalizedResourceId)) {
+    throw new Error('Resource removal is already in progress.');
+  }
+
+  inFlightResourceRemoveIds.add(normalizedResourceId);
+  try {
+    const { data, workspaceId, connectionId } =
+      await invokeGoogleWorkspaceResourceAction({
+        action: 'remove_selected_resource',
+        workspaceId: params.workspaceId,
+        connectionId: params.connectionId,
+        agentId: params.agentId,
+        extraBody: {
+          resource_id: normalizedResourceId,
+        },
+      });
+
+    return {
+      workspaceId,
+      connectionId,
+      resourceId: normalizedResourceId,
+      message:
+        typeof data.message === 'string' && data.message.trim()
+          ? data.message.trim()
+          : 'Resource authorization removed successfully.',
+    };
+  } finally {
+    inFlightResourceRemoveIds.delete(normalizedResourceId);
+  }
+}
+
+/**
+ * Checks backend authorization status for an individual resource
+ * via `google_workspace` (`action: "authorize_selected_resource"`).
+ */
+export async function authorizeGoogleSelectedResource(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  resourceId?: string;
+  googleFileId?: string;
+  agentId?: string | null;
+}): Promise<{ authorized: boolean; resource?: GoogleAuthorizedResource | null }> {
+  const { data, workspaceId, connectionId } =
+    await invokeGoogleWorkspaceResourceAction({
+      action: 'authorize_selected_resource',
+      workspaceId: params.workspaceId,
+      connectionId: params.connectionId,
+      agentId: params.agentId,
+      extraBody: {
+        ...(params.resourceId ? { resource_id: params.resourceId } : {}),
+        ...(params.googleFileId ? { google_file_id: params.googleFileId } : {}),
+      },
+    });
+
+  return {
+    authorized: Boolean(data.authorized ?? data.allowed ?? data.active),
+    resource: data.resource
+      ? mapAuthorizedResourceRow(data.resource, workspaceId, connectionId)
+      : null,
+  };
 }
 
 export interface GoogleOAuthCallbackResult {

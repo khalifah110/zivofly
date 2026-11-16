@@ -157,6 +157,44 @@ export interface GoogleWorkspaceAppConfig {
   lastError?: string | null;
   connectedAt?: string;
   lastSyncedAt?: string;
+  selectedResourceIds?: string[];
+}
+
+export interface GoogleAuthorizedResource {
+  id: string;
+  workspace_id: string;
+  connection_id: string;
+  google_file_id: string;
+  name: string;
+  mime_type: string;
+  resource_type: string;
+  web_view_link: string | null;
+  icon_link?: string | null;
+  status: 'active' | 'revoked' | 'removed' | string;
+  selected_at: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface GoogleSelectedResourcesResult {
+  workspaceId: string;
+  connectionId: string;
+  resources: GoogleAuthorizedResource[];
+  selectedCount: number;
+  activeCount: number;
+  selectionRequired: boolean;
+}
+
+export interface GooglePickerTokenPayload {
+  accessToken: string;
+  expiresAt?: string | null;
+  expiresIn?: number | null;
+  apiKey?: string | null;
+  clientId?: string | null;
+  appId?: string | null;
+  accountEmail?: string | null;
+  scope?: string | null;
+  connectionId?: string | null;
 }
 
 export interface GoogleWorkspaceConfig {
