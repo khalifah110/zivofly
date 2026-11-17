@@ -329,6 +329,41 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
             </button>
           )}
         </div>
+
+        <div className="mt-6 flex items-center justify-center gap-4 text-[11px] text-muted-foreground flex-wrap">
+          <a
+            href="/privacy"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate('/privacy');
+            }}
+            className="hover:text-foreground underline-offset-2 hover:underline transition-colors"
+          >
+            Privacy Policy
+          </a>
+          <span aria-hidden="true">·</span>
+          <a
+            href="/terms"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate('/terms');
+            }}
+            className="hover:text-foreground underline-offset-2 hover:underline transition-colors"
+          >
+            Terms of Service
+          </a>
+          <span aria-hidden="true">·</span>
+          <a
+            href="/support"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate('/support');
+            }}
+            className="hover:text-foreground underline-offset-2 hover:underline transition-colors"
+          >
+            Support
+          </a>
+        </div>
       </div>
     </div>
   );

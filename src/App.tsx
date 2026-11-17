@@ -12,6 +12,9 @@ import { AgentDetailPage } from './pages/AgentDetailPage';
 import { InboxPage } from './pages/InboxPage';
 import { BillingPage } from './pages/BillingPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage';
+import { TermsOfServicePage } from './pages/TermsOfServicePage';
+import { SupportPage } from './pages/SupportPage';
 import { Agent, ChannelConnection, Conversation, User } from './types';
 import { apiFetch } from './lib/api';
 import { supabase } from './lib/supabaseClient';
@@ -297,6 +300,28 @@ function AppContent() {
       );
     }
 
+    if (currentPath === '/privacy' || currentPath === '/privacy-policy') {
+      return (
+        <PrivacyPolicyPage
+          onNavigate={navigate}
+          isAuthenticated={Boolean(user)}
+        />
+      );
+    }
+
+    if (currentPath === '/terms' || currentPath === '/terms-of-service') {
+      return (
+        <TermsOfServicePage
+          onNavigate={navigate}
+          isAuthenticated={Boolean(user)}
+        />
+      );
+    }
+
+    if (currentPath === '/support' || currentPath === '/contact') {
+      return <SupportPage onNavigate={navigate} user={user} />;
+    }
+
     if (currentPath === '/' && !user) {
       return <LandingPage onNavigate={navigate} isAuthenticated={false} />;
     }
@@ -406,6 +431,16 @@ function AppContent() {
     );
   };
 
+  const isFullBleedPublicPage =
+    currentPath === '/' ||
+    currentPath === '/auth' ||
+    currentPath === '/privacy' ||
+    currentPath === '/privacy-policy' ||
+    currentPath === '/terms' ||
+    currentPath === '/terms-of-service' ||
+    currentPath === '/support' ||
+    currentPath === '/contact';
+
   return (
     <div className="min-h-screen bg-background text-foreground antialiased font-sans selection:bg-primary/20 selection:text-primary transition-colors">
       <Toaster position="top-right" richColors theme={theme as 'light' | 'dark'} />
@@ -421,7 +456,7 @@ function AppContent() {
       {/* Main View Container */}
       <main
         className={
-          currentPath === '/' || currentPath === '/auth'
+          isFullBleedPublicPage
             ? ''
             : 'mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8 pb-24 sm:pb-8'
         }
@@ -430,7 +465,7 @@ function AppContent() {
       </main>
 
       {/* Mobile Bottom Navigation Bar */}
-      {user && currentPath !== '/' && currentPath !== '/auth' && (
+      {user && !isFullBleedPublicPage && (
         <MobileNav
           currentPath={currentPath}
           onNavigate={navigate}

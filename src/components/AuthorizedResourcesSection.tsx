@@ -8,7 +8,6 @@ import {
   FileText,
   Film,
   Folder,
-  FolderOpen,
   Image as ImageIcon,
   Loader2,
   Plus,
@@ -40,9 +39,6 @@ interface ServiceUiCopy {
   expiredDescription: string;
   loadingText: string;
   savingText: string;
-  emptyTitle: string;
-  emptyDesc1: string;
-  emptyDesc2: string;
   scopeReauthTitle: string;
 }
 
@@ -64,11 +60,6 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
     loadingText: 'Loading authorized Drive files…',
     savingText:
       'Verifying selected files with Google Drive and saving authorization…',
-    emptyTitle: 'No Drive files selected yet',
-    emptyDesc1:
-      'Your Google Drive account is connected, but Zivofly has not been authorized to access any Drive files yet.',
-    emptyDesc2:
-      'Choose the PDFs, images, CSVs, Microsoft Word/Excel files, or other Drive files Zivofly is allowed to access.',
     scopeReauthTitle: 'Google Drive permissions update required',
   },
   google_docs: {
@@ -88,11 +79,6 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
     loadingText: 'Loading authorized Google Docs…',
     savingText:
       'Verifying selected documents with Google Docs and saving authorization…',
-    emptyTitle: 'No Google Docs selected yet',
-    emptyDesc1:
-      'Your Google Docs account is connected, but Zivofly has not been authorized to access any Google Docs documents yet.',
-    emptyDesc2:
-      'Choose the native Google Docs documents Zivofly is allowed to access for your AI agents.',
     scopeReauthTitle: 'Google Docs permissions update required',
   },
   google_sheets_service: {
@@ -112,11 +98,6 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
     loadingText: 'Loading authorized Google Sheets…',
     savingText:
       'Verifying selected spreadsheets with Google Sheets and saving authorization…',
-    emptyTitle: 'No Google Sheets selected yet',
-    emptyDesc1:
-      'Your Google Sheets account is connected, but Zivofly has not been authorized to access any Google Sheets spreadsheets yet.',
-    emptyDesc2:
-      'Choose the native Google Sheets spreadsheets Zivofly is allowed to access for your AI agents.',
     scopeReauthTitle: 'Google Sheets permissions update required',
   },
 };
@@ -125,7 +106,7 @@ interface AuthorizedResourcesSectionProps {
   service: GoogleResourceServiceKey;
   status: GoogleWorkspaceIntegrationStatus;
   resources: GoogleAuthorizedResource[];
-  selectedCount: number;
+  selectedCount?: number;
   activeCount: number;
   needsScopeReauth?: boolean;
   scopeReauthMessage?: string | null;
@@ -324,7 +305,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
   service,
   status,
   resources,
-  selectedCount,
+  selectedCount: _selectedCount,
   activeCount,
   needsScopeReauth = false,
   scopeReauthMessage = null,
@@ -375,20 +356,9 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               {copy.sectionTitle}
             </span>
             {status === 'connected' && (
-              <>
-                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
-                  {selectedCount} Selected
-                </span>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold border ${
-                    activeCount > 0
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                      : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                  }`}
-                >
-                  {activeCount} Active
-                </span>
-              </>
+              <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
+                {activeCount} Active
+              </span>
             )}
           </div>
           <p className="text-[11px] text-muted-foreground">{copy.subtitle}</p>
@@ -554,7 +524,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
         </div>
       )}
 
-      {/* Connected States: Loading / State B Empty / State C Resource List */}
+      {/* Connected States: Loading / Saving / Selected Resources (when empty, only the top Select button appears) */}
       {status === 'connected' && (
         <>
           {isLoadingResources && resources.length === 0 ? (
@@ -567,48 +537,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               <Loader2 className="size-4 animate-spin" />
               <span>{copy.savingText}</span>
             </div>
-          ) : resources.length === 0 ? (
-            !needsScopeReauth && (
-              /* State B: Connected, No Resources Selected */
-              <div className="rounded-xl border border-dashed border-border bg-muted/25 p-4 sm:p-5 text-center space-y-2.5">
-                <div className="mx-auto flex size-9 items-center justify-center rounded-xl bg-muted border border-border text-muted-foreground">
-                  <FolderOpen className="size-4" />
-                </div>
-                <div className="space-y-1 max-w-md mx-auto">
-                  <p className="text-xs font-semibold text-foreground">
-                    {copy.emptyTitle}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    {copy.emptyDesc1}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    {copy.emptyDesc2}
-                  </p>
-                </div>
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={onSelectResources}
-                    disabled={isPickerActionBusy}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer disabled:opacity-60"
-                  >
-                    {isFetchingPickerToken || isPickerOpen ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Plus className="size-3.5" />
-                    )}
-                    <span>
-                      {isFetchingPickerToken
-                        ? 'Preparing Picker…'
-                        : isPickerOpen
-                        ? 'Selecting in Picker…'
-                        : copy.selectButtonLabel}
-                    </span>
-                  </button>
-                </div>
-              </div>
-            )
-          ) : (
+          ) : resources.length > 0 ? (
             /* State C: Resources Selected */
             <div className="space-y-2">
               {onToggleAgentResource && (
@@ -616,7 +545,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                   <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <ShieldCheck className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>
-                      Select which authorized {copy.serviceLabel} resources this agent can use (verified by the backend at runtime).
+                      Select which authorized {copy.serviceLabel} resources this agent can use (enforced by your workspace backend at runtime).
                     </span>
                   </div>
                 </div>
@@ -720,7 +649,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                 })}
               </div>
             </div>
-          )}
+          ) : null}
         </>
       )}
     </div>

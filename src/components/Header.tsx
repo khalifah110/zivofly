@@ -40,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
 
-          {user && (
+          {user ? (
             <nav className="hidden items-center gap-1 sm:flex">
               <button
                 type="button"
@@ -108,6 +108,53 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 <UserIcon className="size-4" />
                 <span>Profile</span>
+              </button>
+            </nav>
+          ) : (
+            <nav className="hidden items-center gap-1 sm:flex">
+              <button
+                type="button"
+                onClick={() => onNavigate('/')}
+                className={`rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/'
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('/privacy')}
+                className={`rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/privacy' || currentPath === '/privacy-policy'
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Privacy
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('/terms')}
+                className={`rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/terms' || currentPath === '/terms-of-service'
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Terms
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('/support')}
+                className={`rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/support' || currentPath === '/contact'
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Support
               </button>
             </nav>
           )}
@@ -195,99 +242,165 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 Get started
               </button>
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="flex sm:hidden items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-accent transition-colors cursor-pointer"
+                aria-label="Toggle public navigation menu"
+              >
+                {isMobileMenuOpen ? (
+                  <X className="size-4.5 text-foreground" />
+                ) : (
+                  <Menu className="size-4.5 text-foreground" />
+                )}
+              </button>
             </div>
           )}
         </div>
       </div>
 
       {/* Mobile Dropdown Menu (Top Drawer) */}
-      {user && isMobileMenuOpen && (
+      {isMobileMenuOpen && (
         <div className="sm:hidden border-t border-border bg-background/98 backdrop-blur-xl px-4 py-3 space-y-1 shadow-lg animate-in slide-in-from-top-2 duration-150">
-          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1">
-            Navigation
-          </div>
+          {user ? (
+            <>
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1">
+                Navigation
+              </div>
 
-          <button
-            type="button"
-            onClick={() => handleMobileNavClick('/dashboard')}
-            className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-              currentPath === '/dashboard' ||
-              currentPath.startsWith('/channels/') ||
-              currentPath.startsWith('/connect/')
-                ? 'bg-primary/10 text-primary'
-                : 'text-foreground hover:bg-accent'
-            }`}
-          >
-            <LayoutGrid className="size-4.5 text-primary" />
-            <span>Channels</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/dashboard')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/dashboard' ||
+                  currentPath.startsWith('/channels/') ||
+                  currentPath.startsWith('/connect/')
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <LayoutGrid className="size-4.5 text-primary" />
+                <span>Channels</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleMobileNavClick('/agents')}
-            className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-              currentPath.startsWith('/agents')
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                : 'text-foreground hover:bg-accent'
-            }`}
-          >
-            <Bot className="size-4.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Agents</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/agents')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath.startsWith('/agents')
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <Bot className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Agents</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleMobileNavClick('/inbox')}
-            className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-              currentPath === '/inbox'
-                ? 'bg-primary/10 text-primary'
-                : 'text-foreground hover:bg-accent'
-            }`}
-          >
-            <Inbox className="size-4.5 text-primary" />
-            <span>Inbox</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/inbox')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/inbox'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <Inbox className="size-4.5 text-primary" />
+                <span>Inbox</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleMobileNavClick('/billing')}
-            className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-              currentPath === '/billing' || currentPath === '/billing-tokens'
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold'
-                : 'text-foreground hover:bg-accent'
-            }`}
-          >
-            <Coins className="size-4.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Billing & Tokens</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/billing')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/billing' || currentPath === '/billing-tokens'
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <Coins className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Billing &amp; Tokens</span>
+              </button>
 
-          <button
-            type="button"
-            id="mobile-nav-profile-btn"
-            onClick={() => handleMobileNavClick('/profile')}
-            className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-              currentPath === '/profile'
-                ? 'bg-primary/10 text-primary font-semibold'
-                : 'text-foreground hover:bg-accent'
-            }`}
-          >
-            <UserIcon className="size-4.5 text-primary" />
-            <span>Profile & Account</span>
-          </button>
+              <button
+                type="button"
+                id="mobile-nav-profile-btn"
+                onClick={() => handleMobileNavClick('/profile')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/profile'
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <UserIcon className="size-4.5 text-primary" />
+                <span>Profile &amp; Account</span>
+              </button>
 
-          <div className="border-t border-border my-2 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setIsMobileMenuOpen(false);
-                onSignOut();
-              }}
-              className="w-full flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
-            >
-              <LogOut className="size-4 text-destructive" />
-              <span>Sign out</span>
-            </button>
-          </div>
+              <div className="border-t border-border my-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    onSignOut();
+                  }}
+                  className="w-full flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
+                >
+                  <LogOut className="size-4 text-destructive" />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1">
+                Zivofly Information
+              </div>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/')}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <span>Home</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/privacy')}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/privacy' || currentPath === '/privacy-policy'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <span>Privacy Policy</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/terms')}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/terms' || currentPath === '/terms-of-service'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <span>Terms of Service</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/support')}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/support' || currentPath === '/contact'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <span>Contact &amp; Support</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </header>

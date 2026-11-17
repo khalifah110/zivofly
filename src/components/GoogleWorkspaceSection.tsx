@@ -724,9 +724,21 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
         {/* Expanded Apps List */}
         {isExpanded && (
           <div className="border-t border-border p-4 sm:p-6 bg-muted/20 space-y-3 animate-in fade-in duration-200">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-              Select & Connect Google Workspace Tools
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Select &amp; Connect Google Workspace Tools
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                Each service connects independently with its own account and authorized resources.
+              </div>
             </div>
+
+            {isLoadingStatus && (
+              <div className="rounded-xl border border-border bg-card/80 px-3.5 py-2.5 flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin text-primary shrink-0" />
+                <span>Refreshing Google Workspace connection status…</span>
+              </div>
+            )}
 
             {oauthDiagnosticError && (
               <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-3.5 flex items-start justify-between gap-3">
@@ -799,11 +811,6 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                         tone: 'emerald',
                       };
                     }
-                  } else {
-                    resourceStatusBadge = {
-                      label: 'Selection required',
-                      tone: 'amber',
-                    };
                   }
                 }
 
@@ -823,6 +830,11 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                             <span className="text-xs font-bold text-foreground">
                               {app.name}
                             </span>
+                            {app.status === 'disconnected' && !isLoadingStatus && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border">
+                                Not connected
+                              </span>
+                            )}
                             {app.status === 'connected' && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                                 <CheckCircle2 className="size-2.5" />
@@ -857,7 +869,10 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                               </span>
                             )}
                             {app.status !== 'disconnected' && app.email && (
-                              <span className="text-[11px] font-medium text-muted-foreground">
+                              <span
+                                title={`Connected Google account for ${app.name}: ${app.email}`}
+                                className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-foreground/85 border border-border max-w-[220px] truncate"
+                              >
                                 {app.email}
                               </span>
                             )}
@@ -1127,7 +1142,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                 ) : (
                   <>
                     <Unplug className="size-3.5" />
-                    <span>Disconnect</span>
+                    <span>Disconnect {disconnectTarget.name}</span>
                   </>
                 )}
               </button>
