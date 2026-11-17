@@ -13,22 +13,122 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
 import {
   GoogleAuthorizedResource,
+  GoogleResourceServiceKey,
   GoogleWorkspaceIntegrationStatus,
 } from '../types';
 import { GoogleDocsLogo, GoogleSheetsLogo } from './BrandLogos';
 import { logGooglePickerConfigDiagnostic } from '../lib/googlePicker';
+import { isGoogleScopeReauthError } from '../lib/supabaseService';
+
+interface ServiceUiCopy {
+  serviceLabel: string;
+  sectionTitle: string;
+  selectButtonLabel: string;
+  subtitle: string;
+  disconnectedPrompt: string;
+  connectButtonLabel: string;
+  reconnectButtonLabel: string;
+  expiredTitle: string;
+  errorTitle: string;
+  expiredDescription: string;
+  loadingText: string;
+  savingText: string;
+  emptyTitle: string;
+  emptyDesc1: string;
+  emptyDesc2: string;
+  scopeReauthTitle: string;
+}
+
+const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
+  google_drive: {
+    serviceLabel: 'Google Drive',
+    sectionTitle: 'Authorized Drive Files',
+    selectButtonLabel: 'Select Drive Files',
+    subtitle:
+      'Select uploaded Drive files (PDFs, images, CSV, Word, Excel, archives) or folders for this Google Drive connection. Native Google Docs and Sheets are managed separately.',
+    disconnectedPrompt:
+      'Connect your Google Drive account to browse and select Drive files, PDFs, images, CSVs, Word, and Excel documents.',
+    connectButtonLabel: 'Connect Google Drive',
+    reconnectButtonLabel: 'Reconnect Google Drive',
+    expiredTitle: 'Google Drive authorization expired',
+    errorTitle: 'Google Drive connection needs attention',
+    expiredDescription:
+      'Reconnect your Google Drive account to browse, verify, or authorize Drive files.',
+    loadingText: 'Loading authorized Drive files…',
+    savingText:
+      'Verifying selected files with Google Drive and saving authorization…',
+    emptyTitle: 'No Drive files selected yet',
+    emptyDesc1:
+      'Your Google Drive account is connected, but Zivofly has not been authorized to access any Drive files yet.',
+    emptyDesc2:
+      'Choose the PDFs, images, CSVs, Microsoft Word/Excel files, or other Drive files Zivofly is allowed to access.',
+    scopeReauthTitle: 'Google Drive permissions update required',
+  },
+  google_docs: {
+    serviceLabel: 'Google Docs',
+    sectionTitle: 'Authorized Google Docs',
+    selectButtonLabel: 'Select Google Docs',
+    subtitle:
+      'Select native Google Docs documents authorized specifically through this Google Docs connection.',
+    disconnectedPrompt:
+      'Connect your Google Docs account to browse and select native Google Docs documents.',
+    connectButtonLabel: 'Connect Google Docs',
+    reconnectButtonLabel: 'Reconnect Google Docs',
+    expiredTitle: 'Google Docs authorization expired',
+    errorTitle: 'Google Docs connection needs attention',
+    expiredDescription:
+      'Reconnect your Google Docs account to browse, verify, or authorize documents.',
+    loadingText: 'Loading authorized Google Docs…',
+    savingText:
+      'Verifying selected documents with Google Docs and saving authorization…',
+    emptyTitle: 'No Google Docs selected yet',
+    emptyDesc1:
+      'Your Google Docs account is connected, but Zivofly has not been authorized to access any Google Docs documents yet.',
+    emptyDesc2:
+      'Choose the native Google Docs documents Zivofly is allowed to access for your AI agents.',
+    scopeReauthTitle: 'Google Docs permissions update required',
+  },
+  google_sheets_service: {
+    serviceLabel: 'Google Sheets',
+    sectionTitle: 'Authorized Google Sheets',
+    selectButtonLabel: 'Select Google Sheets',
+    subtitle:
+      'Select native Google Sheets spreadsheets authorized specifically through this Google Sheets connection.',
+    disconnectedPrompt:
+      'Connect your Google Sheets account to browse and select native Google Sheets spreadsheets.',
+    connectButtonLabel: 'Connect Google Sheets',
+    reconnectButtonLabel: 'Reconnect Google Sheets',
+    expiredTitle: 'Google Sheets authorization expired',
+    errorTitle: 'Google Sheets connection needs attention',
+    expiredDescription:
+      'Reconnect your Google Sheets account to browse, verify, or authorize spreadsheets.',
+    loadingText: 'Loading authorized Google Sheets…',
+    savingText:
+      'Verifying selected spreadsheets with Google Sheets and saving authorization…',
+    emptyTitle: 'No Google Sheets selected yet',
+    emptyDesc1:
+      'Your Google Sheets account is connected, but Zivofly has not been authorized to access any Google Sheets spreadsheets yet.',
+    emptyDesc2:
+      'Choose the native Google Sheets spreadsheets Zivofly is allowed to access for your AI agents.',
+    scopeReauthTitle: 'Google Sheets permissions update required',
+  },
+};
 
 interface AuthorizedResourcesSectionProps {
-  driveStatus: GoogleWorkspaceIntegrationStatus;
+  service: GoogleResourceServiceKey;
+  status: GoogleWorkspaceIntegrationStatus;
   resources: GoogleAuthorizedResource[];
   selectedCount: number;
   activeCount: number;
+  needsScopeReauth?: boolean;
+  scopeReauthMessage?: string | null;
   isLoadingResources: boolean;
   isFetchingPickerToken: boolean;
   isPickerOpen: boolean;
@@ -41,7 +141,7 @@ interface AuthorizedResourcesSectionProps {
   onSelectResources: () => void;
   onRequestRemoveResource: (resource: GoogleAuthorizedResource) => void;
   onRefreshResources: () => void;
-  onConnectDrive: () => void;
+  onConnectService: () => void;
   onClearError: () => void;
 }
 
@@ -90,6 +190,7 @@ export function formatSelectionDate(dateIso?: string | null): string {
 
 interface RemoveGoogleResourceModalProps {
   resource: GoogleAuthorizedResource | null;
+  service?: GoogleResourceServiceKey;
   isRemoving: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -97,6 +198,7 @@ interface RemoveGoogleResourceModalProps {
 
 export const RemoveGoogleResourceModal: React.FC<RemoveGoogleResourceModalProps> = ({
   resource,
+  service,
   isRemoving,
   onCancel,
   onConfirm,
@@ -113,6 +215,10 @@ export const RemoveGoogleResourceModal: React.FC<RemoveGoogleResourceModalProps>
   }, [resource, isRemoving, onCancel]);
 
   if (!resource) return null;
+
+  const effectiveService: GoogleResourceServiceKey =
+    service || resource.service || 'google_drive';
+  const serviceLabel = SERVICE_UI_COPY[effectiveService].serviceLabel;
 
   return (
     <div
@@ -143,7 +249,7 @@ export const RemoveGoogleResourceModal: React.FC<RemoveGoogleResourceModalProps>
                 id="remove-google-resource-title"
                 className="text-base font-semibold text-foreground"
               >
-                Remove Resource Authorization?
+                Remove {serviceLabel} Authorization?
               </h3>
               <p className="text-xs text-muted-foreground truncate max-w-[260px]">
                 {resource.name} ({resource.resource_type})
@@ -171,11 +277,13 @@ export const RemoveGoogleResourceModal: React.FC<RemoveGoogleResourceModalProps>
             <span className="font-semibold text-foreground">
               {resource.name}
             </span>{' '}
-            prevents Zivofly from accessing this resource in your workspace.
+            revokes Zivofly&apos;s access to this resource for{' '}
+            <span className="font-semibold text-foreground">{serviceLabel}</span>{' '}
+            in your workspace.
           </p>
 
           <div className="rounded-xl border border-border bg-muted/40 p-3 text-[11px] text-muted-foreground leading-relaxed">
-            Your actual file in Google Drive will not be deleted. This only removes Zivofly&apos;s authorization record.
+            Your actual file in Google will not be deleted, and other connected Google services will remain unaffected.
           </div>
         </div>
 
@@ -213,10 +321,13 @@ export const RemoveGoogleResourceModal: React.FC<RemoveGoogleResourceModalProps>
 };
 
 export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProps> = ({
-  driveStatus,
+  service,
+  status,
   resources,
   selectedCount,
   activeCount,
+  needsScopeReauth = false,
+  scopeReauthMessage = null,
   isLoadingResources,
   isFetchingPickerToken,
   isPickerOpen,
@@ -229,9 +340,10 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
   onSelectResources,
   onRequestRemoveResource,
   onRefreshResources,
-  onConnectDrive,
+  onConnectService,
   onClearError,
 }) => {
+  const copy = SERVICE_UI_COPY[service];
   const pickerEnvStatus = logGooglePickerConfigDiagnostic();
 
   const isPickerActionBusy =
@@ -247,9 +359,11 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
     ? 'Selecting in Picker…'
     : isSavingSelection
     ? 'Saving Resources…'
-    : activeCount > 0
-    ? 'Manage Resources'
-    : 'Select Resources';
+    : copy.selectButtonLabel;
+
+  const showErrorReconnect = Boolean(
+    resourcesError && isGoogleScopeReauthError(resourcesError)
+  );
 
   return (
     <div className="mt-3 pt-3 border-t border-border/80 space-y-3">
@@ -258,9 +372,9 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
         <div className="space-y-0.5">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-semibold text-foreground">
-              Authorized Resources
+              {copy.sectionTitle}
             </span>
-            {driveStatus === 'connected' && (
+            {status === 'connected' && (
               <>
                 <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
                   {selectedCount} Selected
@@ -277,43 +391,80 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               </>
             )}
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            Google Drive is the central resource selector for Drive files, Google Docs, Google Sheets, PDFs, images, videos, and archives.
-          </p>
+          <p className="text-[11px] text-muted-foreground">{copy.subtitle}</p>
         </div>
 
-        {driveStatus === 'connected' && (
+        {status === 'connected' && (
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={onRefreshResources}
               disabled={isLoadingResources || isPickerActionBusy}
-              title="Refresh authorized resources"
+              title={`Refresh authorized ${copy.serviceLabel} resources`}
               className="inline-flex items-center justify-center rounded-xl border border-border bg-background p-2 text-muted-foreground hover:text-foreground hover:bg-accent/70 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw
                 className={`size-3.5 ${isLoadingResources ? 'animate-spin' : ''}`}
               />
             </button>
-            <button
-              type="button"
-              onClick={onSelectResources}
-              disabled={isPickerActionBusy}
-              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 transition-colors shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isFetchingPickerToken || isPickerOpen || isSavingSelection ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Plus className="size-3.5" />
-              )}
-              <span>{pickerButtonLabel}</span>
-            </button>
+            {needsScopeReauth ? (
+              <button
+                type="button"
+                onClick={onConnectService}
+                disabled={isBusyConnectingOrDisconnecting}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 transition-colors shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className="size-3.5" />
+                <span>{copy.reconnectButtonLabel}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSelectResources}
+                disabled={isPickerActionBusy}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 transition-colors shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isFetchingPickerToken || isPickerOpen || isSavingSelection ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Plus className="size-3.5" />
+                )}
+                <span>{pickerButtonLabel}</span>
+              </button>
+            )}
           </div>
         )}
       </div>
 
+      {/* Scope Reauthorization Prompt (isolated to this service only) */}
+      {status === 'connected' && needsScopeReauth && (
+        <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+                {copy.scopeReauthTitle}
+              </p>
+              <p className="text-[11px] text-amber-700/90 dark:text-amber-300/90 leading-relaxed">
+                {scopeReauthMessage ||
+                  `Reconnect ${copy.serviceLabel} to grant the updated Google OAuth permissions required for independent resource selection. Other Google integrations will not be reset.`}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={isBusyConnectingOrDisconnecting}
+            onClick={onConnectService}
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className="size-3.5" />
+            <span>{copy.reconnectButtonLabel}</span>
+          </button>
+        </div>
+      )}
+
       {/* Frontend Picker Config Diagnostic Warning */}
-      {driveStatus === 'connected' && pickerEnvStatus.configError && !resourcesError && (
+      {status === 'connected' && pickerEnvStatus.configError && !resourcesError && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2">
           <AlertCircle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
           <div className="space-y-1 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
@@ -332,120 +483,131 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
 
       {/* Inline Error Banner */}
       {resourcesError && (
-        <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-3 flex items-start justify-between gap-2.5">
+        <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-3 flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
           <div className="flex items-start gap-2">
             <AlertCircle className="size-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
             <p className="text-[11px] text-red-600 dark:text-red-400 leading-relaxed break-words">
               {resourcesError}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClearError}
-            className="text-[11px] font-semibold text-red-600 dark:text-red-400 hover:underline shrink-0 cursor-pointer"
-          >
-            Dismiss
-          </button>
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+            {showErrorReconnect && status === 'connected' && !needsScopeReauth && (
+              <button
+                type="button"
+                disabled={isBusyConnectingOrDisconnecting}
+                onClick={onConnectService}
+                className="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className="size-3" />
+                <span>{copy.reconnectButtonLabel}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClearError}
+              className="text-[11px] font-semibold text-red-600 dark:text-red-400 hover:underline shrink-0 cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
-      {/* State A: Google Drive Not Connected */}
-      {driveStatus === 'disconnected' && (
+      {/* State A: Integration Not Connected */}
+      {status === 'disconnected' && (
         <div className="rounded-xl border border-dashed border-border bg-muted/30 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            Connect your Google Drive account to browse and select Drive files, Google Docs, and Google Sheets.
-          </p>
+          <p className="text-xs text-muted-foreground">{copy.disconnectedPrompt}</p>
           <button
             type="button"
             disabled={isBusyConnectingOrDisconnecting}
-            onClick={onConnectDrive}
+            onClick={onConnectService}
             className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer disabled:opacity-50"
           >
-            <span>Connect Google Drive</span>
+            <span>{copy.connectButtonLabel}</span>
           </button>
         </div>
       )}
 
-      {/* State D: Google Authorization Expired / Error */}
-      {(driveStatus === 'expired' || driveStatus === 'error') && (
+      {/* State D: Authorization Expired / Error */}
+      {(status === 'expired' || status === 'error') && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-2">
             <AlertCircle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
-                {driveStatus === 'expired'
-                  ? 'Google Drive authorization expired'
-                  : 'Google Drive connection needs attention'}
+                {status === 'expired' ? copy.expiredTitle : copy.errorTitle}
               </p>
               <p className="text-[11px] text-amber-700/90 dark:text-amber-300/90">
-                Reconnect your Google Drive account to browse, verify, or authorize files.
+                {copy.expiredDescription}
               </p>
             </div>
           </div>
           <button
             type="button"
             disabled={isBusyConnectingOrDisconnecting}
-            onClick={onConnectDrive}
+            onClick={onConnectService}
             className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className="size-3.5" />
-            <span>Reconnect Google Drive</span>
+            <span>{copy.reconnectButtonLabel}</span>
           </button>
         </div>
       )}
 
       {/* Connected States: Loading / State B Empty / State C Resource List */}
-      {driveStatus === 'connected' && (
+      {status === 'connected' && (
         <>
           {isLoadingResources && resources.length === 0 ? (
             <div className="rounded-xl border border-border bg-muted/20 p-4 flex items-center justify-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              <span>Loading authorized resources…</span>
+              <span>{copy.loadingText}</span>
             </div>
           ) : isSavingSelection ? (
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center justify-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
               <Loader2 className="size-4 animate-spin" />
-              <span>Verifying selected files with Google Drive and saving authorization…</span>
+              <span>{copy.savingText}</span>
             </div>
           ) : resources.length === 0 ? (
-            /* State B: Connected, No Resources Selected */
-            <div className="rounded-xl border border-dashed border-border bg-muted/25 p-4 sm:p-5 text-center space-y-2.5">
-              <div className="mx-auto flex size-9 items-center justify-center rounded-xl bg-muted border border-border text-muted-foreground">
-                <FolderOpen className="size-4" />
+            !needsScopeReauth && (
+              /* State B: Connected, No Resources Selected */
+              <div className="rounded-xl border border-dashed border-border bg-muted/25 p-4 sm:p-5 text-center space-y-2.5">
+                <div className="mx-auto flex size-9 items-center justify-center rounded-xl bg-muted border border-border text-muted-foreground">
+                  <FolderOpen className="size-4" />
+                </div>
+                <div className="space-y-1 max-w-md mx-auto">
+                  <p className="text-xs font-semibold text-foreground">
+                    {copy.emptyTitle}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    {copy.emptyDesc1}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    {copy.emptyDesc2}
+                  </p>
+                </div>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={onSelectResources}
+                    disabled={isPickerActionBusy}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer disabled:opacity-60"
+                  >
+                    {isFetchingPickerToken || isPickerOpen ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="size-3.5" />
+                    )}
+                    <span>
+                      {isFetchingPickerToken
+                        ? 'Preparing Picker…'
+                        : isPickerOpen
+                        ? 'Selecting in Picker…'
+                        : copy.selectButtonLabel}
+                    </span>
+                  </button>
+                </div>
               </div>
-              <div className="space-y-1 max-w-md mx-auto">
-                <p className="text-xs font-semibold text-foreground">
-                  No resources selected yet
-                </p>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Your Google account is connected, but Zivofly has not been authorized to access any files yet.
-                </p>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Choose the Google Drive files, Docs, Sheets, PDFs, or media Zivofly is allowed to access. Your AI agents will only be able to use resources you authorize.
-                </p>
-              </div>
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={onSelectResources}
-                  disabled={isPickerActionBusy}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer disabled:opacity-60"
-                >
-                  {isFetchingPickerToken || isPickerOpen ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Plus className="size-3.5" />
-                  )}
-                  <span>
-                    {isFetchingPickerToken
-                      ? 'Preparing Picker…'
-                      : isPickerOpen
-                      ? 'Selecting in Picker…'
-                      : 'Select Resources'}
-                  </span>
-                </button>
-              </div>
-            </div>
+            )
           ) : (
             /* State C: Resources Selected */
             <div className="space-y-2">
@@ -454,7 +616,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                   <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <ShieldCheck className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>
-                      Select which authorized resources this agent can use (verified by the backend at runtime).
+                      Select which authorized {copy.serviceLabel} resources this agent can use (verified by the backend at runtime).
                     </span>
                   </div>
                 </div>
@@ -508,7 +670,10 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
                             <span>
-                              Selected {formatSelectionDate(resource.selected_at || resource.created_at)}
+                              Selected{' '}
+                              {formatSelectionDate(
+                                resource.selected_at || resource.created_at
+                              )}
                             </span>
                             {isFolder && (
                               <span className="text-amber-600 dark:text-amber-400">

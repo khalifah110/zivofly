@@ -1,16 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
 import {
   GoogleAuthorizedResource,
+  GoogleResourceServiceKey,
   GoogleWorkspaceIntegrationStatus,
 } from '../types';
 import {
+  evaluateGoogleConnectionScopes,
   getGooglePickerToken,
   getGoogleSelectedResources,
+  GOOGLE_WORKSPACE_SERVICE_LABELS,
+  isGoogleScopeReauthError,
   removeGoogleSelectedResource,
   saveGoogleSelectedResources,
 } from '../lib/supabaseService';
 import {
+  filterAndValidatePickerFiles,
   GooglePickerInitialView,
   openGooglePicker,
   resolveGooglePickerConfig,
@@ -18,19 +23,25 @@ import {
 } from '../lib/googlePicker';
 
 interface UseGoogleSelectedResourcesParams {
+  service: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId?: string | null;
   status: GoogleWorkspaceIntegrationStatus;
-  driveAccountEmail?: string | null;
+  accountEmail?: string | null;
+  connectionScopes?: string[];
   agentId?: string | null;
   onResourcesUpdated?: (activeResourceIds: string[]) => void;
 }
 
 export interface UseGoogleSelectedResourcesReturn {
+  service: GoogleResourceServiceKey;
   resources: GoogleAuthorizedResource[];
   selectedCount: number;
   activeCount: number;
   selectionRequired: boolean;
+  needsScopeReauth: boolean;
+  scopeReauthMessage: string | null;
+  missingScopes: string[];
   isLoadingResources: boolean;
   isFetchingPickerToken: boolean;
   isPickerOpen: boolean;
@@ -43,14 +54,26 @@ export interface UseGoogleSelectedResourcesReturn {
   removeResource: (resource: GoogleAuthorizedResource) => Promise<boolean>;
 }
 
+function getDefaultInitialViewForService(
+  service: GoogleResourceServiceKey
+): GooglePickerInitialView {
+  if (service === 'google_docs') return 'documents';
+  if (service === 'google_sheets_service') return 'spreadsheets';
+  return 'drive';
+}
+
 export function useGoogleSelectedResources({
+  service,
   workspaceId,
   connectionId,
   status,
-  driveAccountEmail,
+  accountEmail,
+  connectionScopes,
   agentId,
   onResourcesUpdated,
 }: UseGoogleSelectedResourcesParams): UseGoogleSelectedResourcesReturn {
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+
   const [resources, setResources] = useState<GoogleAuthorizedResource[]>([]);
   const [selectedCount, setSelectedCount] = useState<number>(0);
   const [activeCount, setActiveCount] = useState<number>(0);
@@ -62,11 +85,39 @@ export function useGoogleSelectedResources({
   const [isSavingSelection, setIsSavingSelection] = useState<boolean>(false);
   const [removingResourceId, setRemovingResourceId] = useState<string | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
+  const [runtimeScopeReauthMessage, setRuntimeScopeReauthMessage] = useState<
+    string | null
+  >(null);
+  const [runtimeMissingScopes, setRuntimeMissingScopes] = useState<string[]>([]);
 
   const onResourcesUpdatedRef = useRef(onResourcesUpdated);
   onResourcesUpdatedRef.current = onResourcesUpdated;
 
   const isSelectingRef = useRef<boolean>(false);
+
+  const proactiveScopeCheck = useMemo(
+    () =>
+      status === 'connected'
+        ? evaluateGoogleConnectionScopes(service, connectionScopes)
+        : {
+            hasRecordedScopes: false,
+            missingScopes: [],
+            needsReconnect: false,
+            message: null,
+          },
+    [service, status, connectionScopes]
+  );
+
+  const needsScopeReauth = Boolean(
+    status === 'connected' &&
+      (proactiveScopeCheck.needsReconnect || runtimeScopeReauthMessage)
+  );
+  const scopeReauthMessage =
+    proactiveScopeCheck.message || runtimeScopeReauthMessage || null;
+  const missingScopes = useMemo(() => {
+    const proactive = proactiveScopeCheck.missingScopes.map((s) => s.shortName);
+    return Array.from(new Set([...proactive, ...runtimeMissingScopes]));
+  }, [proactiveScopeCheck.missingScopes, runtimeMissingScopes]);
 
   const resetResourceState = useCallback(() => {
     setResources([]);
@@ -74,6 +125,8 @@ export function useGoogleSelectedResources({
     setActiveCount(0);
     setSelectionRequired(true);
     setResourcesError(null);
+    setRuntimeScopeReauthMessage(null);
+    setRuntimeMissingScopes([]);
   }, []);
 
   const refreshResources = useCallback(async () => {
@@ -82,7 +135,7 @@ export function useGoogleSelectedResources({
       return;
     }
 
-    // Do not try to load resources if Google authorization is expired until user reconnects
+    // Do not try to load resources if authorization is expired until user reconnects
     if (status === 'expired') {
       setResources([]);
       setSelectedCount(0);
@@ -96,12 +149,13 @@ export function useGoogleSelectedResources({
 
     try {
       const result = await getGoogleSelectedResources({
+        service,
         workspaceId,
         connectionId,
         agentId,
       });
 
-      // Only show active authorized resources returned by the backend
+      // Only show active authorized resources returned for this exact connection ID
       const activeResources = result.resources.filter(
         (r) => !r.status || r.status === 'active'
       );
@@ -116,7 +170,11 @@ export function useGoogleSelectedResources({
       }
     } catch (err: any) {
       const msg =
-        err?.message || 'Could not load authorized Google Drive resources.';
+        err?.message ||
+        `Could not load authorized ${serviceLabel} resources.`;
+      if (isGoogleScopeReauthError(msg)) {
+        setRuntimeScopeReauthMessage(msg);
+      }
       setResourcesError(msg);
       setResources([]);
       setSelectedCount(0);
@@ -124,16 +182,24 @@ export function useGoogleSelectedResources({
     } finally {
       setIsLoadingResources(false);
     }
-  }, [workspaceId, connectionId, status, agentId, resetResourceState]);
+  }, [
+    service,
+    serviceLabel,
+    workspaceId,
+    connectionId,
+    status,
+    agentId,
+    resetResourceState,
+  ]);
 
   // Reset and reload resources whenever workspace, connection, or status changes
   useEffect(() => {
     resetResourceState();
     void refreshResources();
-  }, [refreshResources, resetResourceState]);
+  }, [refreshResources, resetResourceState, connectionScopes]);
 
   const selectResources = useCallback(
-    async (initialView: GooglePickerInitialView = 'all') => {
+    async (initialView?: GooglePickerInitialView) => {
       if (isSelectingRef.current || isSavingSelection || removingResourceId) {
         return;
       }
@@ -141,10 +207,19 @@ export function useGoogleSelectedResources({
       if (status !== 'connected' || !connectionId) {
         const msg =
           status === 'expired'
-            ? 'Your Google Drive authorization has expired. Please reconnect Google Drive first.'
-            : 'Connect your Google Drive account before selecting resources.';
+            ? `Your ${serviceLabel} authorization has expired. Please reconnect ${serviceLabel} first.`
+            : `Connect your ${serviceLabel} account before selecting resources.`;
         setResourcesError(msg);
         toast.error(msg);
+        return;
+      }
+
+      if (needsScopeReauth) {
+        const msg =
+          scopeReauthMessage ||
+          `${serviceLabel} requires updated Google OAuth permissions. Please reconnect ${serviceLabel}.`;
+        setResourcesError(msg);
+        toast.error(msg, { duration: 7000 });
         return;
       }
 
@@ -155,41 +230,72 @@ export function useGoogleSelectedResources({
         return;
       }
 
+      const effectiveInitialView =
+        initialView || getDefaultInitialViewForService(service);
+
       isSelectingRef.current = true;
       setResourcesError(null);
       setIsFetchingPickerToken(true);
 
       try {
-        // Step 1: Fetch short-lived access token from `google_workspace` (never stored in browser storage)
+        // Step 1: Fetch short-lived access token from `google_workspace` strictly for this connection ID
         const tokenPayload = await getGooglePickerToken({
+          service,
           workspaceId,
           connectionId,
           agentId,
         });
 
+        // Also validate scope metadata if returned directly by picker_token
+        if (tokenPayload.scope) {
+          const payloadScopeEval = evaluateGoogleConnectionScopes(
+            service,
+            tokenPayload.scope
+          );
+          if (payloadScopeEval.needsReconnect) {
+            setRuntimeMissingScopes(
+              payloadScopeEval.missingScopes.map((s) => s.shortName)
+            );
+            setRuntimeScopeReauthMessage(
+              payloadScopeEval.message ||
+                `${serviceLabel} requires updated Google permissions. Please reconnect ${serviceLabel}.`
+            );
+            throw new Error(
+              payloadScopeEval.message ||
+                `${serviceLabel} is missing required OAuth permissions. Please reconnect ${serviceLabel}.`
+            );
+          }
+        }
+
         // Resolve frontend env configuration (VITE_GOOGLE_PICKER_API_KEY / VITE_GOOGLE_CLIENT_ID)
-        // with optional backend metadata overrides
         const preResolved = resolveGooglePickerConfig({
           apiKey: tokenPayload.apiKey,
           clientId: tokenPayload.clientId,
           appId: tokenPayload.appId,
         });
 
-        // Step 2: Verify the token belongs to the connected account, carries Drive scope,
-        // and confirm the Google Cloud project number (appId)
+        // Step 2: Verify token identity & service-required scopes via Google tokeninfo
         const expectedAccountEmail =
-          tokenPayload.accountEmail || driveAccountEmail || null;
+          tokenPayload.accountEmail || accountEmail || null;
 
         const tokenCheck = await verifyGooglePickerAccessToken({
+          service,
           accessToken: tokenPayload.accessToken,
           expectedAccountEmail,
           expectedAppId: preResolved.appId,
         });
 
         if (!tokenCheck.valid) {
+          if (tokenCheck.needsReconnect || tokenCheck.missingScopes.length > 0) {
+            setRuntimeMissingScopes(tokenCheck.missingScopes);
+            setRuntimeScopeReauthMessage(
+              tokenCheck.error ||
+                `Please reconnect ${serviceLabel} to grant updated permissions.`
+            );
+          }
           throw new Error(
             tokenCheck.error ||
-              'Google Drive authorization token verification failed. Please reconnect Google Drive.'
+              `${serviceLabel} authorization token verification failed. Please reconnect ${serviceLabel}.`
           );
         }
 
@@ -201,13 +307,13 @@ export function useGoogleSelectedResources({
         setIsFetchingPickerToken(false);
         setIsPickerOpen(true);
 
-        // Step 3: Load & open official Google Picker modal
+        // Step 3: Load & open service-specific Google Picker modal
         const pickerResult = await openGooglePicker({
           accessToken: tokenPayload.accessToken,
           apiKey: preResolved.apiKey,
           clientId: effectiveClientId,
           appId: effectiveAppId,
-          initialView,
+          initialView: effectiveInitialView,
         });
 
         setIsPickerOpen(false);
@@ -222,28 +328,63 @@ export function useGoogleSelectedResources({
           return;
         }
 
-        // Step 5: Send only google_file_id values to `google_workspace` (`action: "save_selected_resources"`)
+        // Step 5: Filter and reject disallowed file types before calling save_selected_resources
+        const { validFiles, rejectedFiles, rejectionMessage } =
+          filterAndValidatePickerFiles(service, pickerResult.files);
+
+        if (rejectedFiles.length > 0 && validFiles.length === 0) {
+          const rejectMsg =
+            rejectionMessage ||
+            `Selected files are not allowed in ${serviceLabel}.`;
+          setResourcesError(rejectMsg);
+          toast.error(rejectMsg, { duration: 7000 });
+          return;
+        }
+
+        if (rejectedFiles.length > 0 && rejectionMessage) {
+          toast.warning(rejectionMessage, { duration: 7000 });
+        }
+
+        // Step 6: Send only google_file_id values for this exact connection_id
         setIsSavingSelection(true);
         const saveResult = await saveGoogleSelectedResources({
+          service,
           workspaceId,
           connectionId,
-          selectedFiles: pickerResult.files,
+          selectedFiles: validFiles,
           agentId,
         });
 
-        // Step 6: Refresh authorized resources list from backend before showing confirmation
+        if (
+          saveResult.rejectedCount > 0 &&
+          saveResult.rejectedReasons.length > 0
+        ) {
+          toast.warning(
+            `${serviceLabel} rejected ${
+              saveResult.rejectedCount
+            } file(s): ${saveResult.rejectedReasons.join('; ')}`,
+            { duration: 7000 }
+          );
+        }
+
+        // Step 7: Refresh authorized resources list from backend before showing confirmation
         await refreshResources();
         toast.success(saveResult.message);
       } catch (err: any) {
         setIsFetchingPickerToken(false);
         setIsPickerOpen(false);
         const msg =
-          err?.message || 'Failed to select or authorize Google Drive resources.';
+          err?.message ||
+          `Failed to select or authorize ${serviceLabel} resources.`;
+        if (isGoogleScopeReauthError(msg)) {
+          setRuntimeScopeReauthMessage(msg);
+        }
         console.error('[Google Picker] Selection flow error:', {
+          service,
           message: msg,
           workspaceId,
           connectionId,
-          initialView,
+          initialView: effectiveInitialView,
         });
         setResourcesError(msg);
         toast.error(msg, { duration: 7000 });
@@ -255,10 +396,14 @@ export function useGoogleSelectedResources({
       }
     },
     [
+      service,
+      serviceLabel,
       status,
       connectionId,
       workspaceId,
-      driveAccountEmail,
+      accountEmail,
+      needsScopeReauth,
+      scopeReauthMessage,
       agentId,
       isSavingSelection,
       removingResourceId,
@@ -273,7 +418,7 @@ export function useGoogleSelectedResources({
       }
 
       if (!connectionId || !workspaceId) {
-        const msg = 'Missing active workspace or Google Drive connection ID.';
+        const msg = `Missing active workspace or ${serviceLabel} connection ID.`;
         setResourcesError(msg);
         toast.error(msg);
         return false;
@@ -284,6 +429,7 @@ export function useGoogleSelectedResources({
 
       try {
         const res = await removeGoogleSelectedResource({
+          service,
           workspaceId,
           connectionId,
           resourceId: resource.id,
@@ -305,6 +451,8 @@ export function useGoogleSelectedResources({
       }
     },
     [
+      service,
+      serviceLabel,
       removingResourceId,
       isSavingSelection,
       connectionId,
@@ -315,10 +463,14 @@ export function useGoogleSelectedResources({
   );
 
   return {
+    service,
     resources,
     selectedCount,
     activeCount,
     selectionRequired,
+    needsScopeReauth,
+    scopeReauthMessage,
+    missingScopes,
     isLoadingResources,
     isFetchingPickerToken,
     isPickerOpen,

@@ -120,6 +120,11 @@ export type GoogleWorkspaceServiceIdentifier =
   | 'google_sheets_service'
   | 'google_calendar';
 
+export type GoogleResourceServiceKey =
+  | 'google_drive'
+  | 'google_docs'
+  | 'google_sheets_service';
+
 export type GoogleWorkspaceIntegrationStatus =
   | 'connected'
   | 'expired'
@@ -147,6 +152,7 @@ export interface GoogleSheetToolConfig {
   connectedAt?: string;
   lastSyncedAt?: string;
   status?: 'connected' | 'disconnected' | 'syncing' | 'expired' | 'error';
+  selectedResourceIds?: string[];
 }
 
 export interface GoogleWorkspaceAppConfig {
@@ -164,6 +170,7 @@ export interface GoogleAuthorizedResource {
   id: string;
   workspace_id: string;
   connection_id: string;
+  service?: GoogleResourceServiceKey;
   google_file_id: string;
   name: string;
   mime_type: string;
@@ -179,6 +186,7 @@ export interface GoogleAuthorizedResource {
 export interface GoogleSelectedResourcesResult {
   workspaceId: string;
   connectionId: string;
+  service?: GoogleResourceServiceKey;
   resources: GoogleAuthorizedResource[];
   selectedCount: number;
   activeCount: number;

@@ -9,6 +9,7 @@ import {
   GoogleWorkspaceConfig,
   GoogleWorkspaceIntegrationStatus,
   GoogleWorkspaceServiceIdentifier,
+  GoogleResourceServiceKey,
   GoogleAuthorizedResource,
   GoogleSelectedResourcesResult,
   GooglePickerTokenPayload,
@@ -3136,6 +3137,169 @@ export const GOOGLE_WORKSPACE_SERVICE_LABELS: Record<
   google_calendar: 'Google Calendar',
 };
 
+export interface GoogleRequiredScopeSpec {
+  shortName: 'drive.file' | 'documents' | 'spreadsheets';
+  uri: string;
+  label: string;
+}
+
+export const REQUIRED_GOOGLE_RESOURCE_SCOPES: Record<
+  GoogleResourceServiceKey,
+  GoogleRequiredScopeSpec[]
+> = {
+  google_drive: [
+    {
+      shortName: 'drive.file',
+      uri: 'https://www.googleapis.com/auth/drive.file',
+      label: 'Google Drive file selection (drive.file)',
+    },
+  ],
+  google_docs: [
+    {
+      shortName: 'drive.file',
+      uri: 'https://www.googleapis.com/auth/drive.file',
+      label: 'Google Drive file selection (drive.file)',
+    },
+    {
+      shortName: 'documents',
+      uri: 'https://www.googleapis.com/auth/documents',
+      label: 'Google Docs access (documents)',
+    },
+  ],
+  google_sheets_service: [
+    {
+      shortName: 'drive.file',
+      uri: 'https://www.googleapis.com/auth/drive.file',
+      label: 'Google Drive file selection (drive.file)',
+    },
+    {
+      shortName: 'spreadsheets',
+      uri: 'https://www.googleapis.com/auth/spreadsheets',
+      label: 'Google Sheets access (spreadsheets)',
+    },
+  ],
+};
+
+export interface GoogleScopeEvaluationResult {
+  hasRecordedScopes: boolean;
+  missingScopes: GoogleRequiredScopeSpec[];
+  needsReconnect: boolean;
+  message: string | null;
+}
+
+export function normalizeScopesList(
+  rawScopes: unknown,
+  meta?: Record<string, any>
+): string[] {
+  const collected: string[] = [];
+  const pushParts = (val: unknown) => {
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === 'string') {
+          for (const part of item.split(/[\s,]+/)) {
+            const trimmed = part.trim();
+            if (trimmed) collected.push(trimmed);
+          }
+        }
+      }
+    } else if (typeof val === 'string') {
+      for (const part of val.split(/[\s,]+/)) {
+        const trimmed = part.trim();
+        if (trimmed) collected.push(trimmed);
+      }
+    }
+  };
+
+  pushParts(rawScopes);
+  if (collected.length === 0 && meta) {
+    pushParts(meta.scopes);
+    pushParts(meta.scope);
+  }
+
+  return Array.from(new Set(collected));
+}
+
+function hasNormalizedScope(
+  normalizedScopes: string[],
+  spec: GoogleRequiredScopeSpec
+): boolean {
+  const lowerSet = new Set(normalizedScopes.map((s) => s.toLowerCase()));
+  if (spec.shortName === 'drive.file') {
+    return (
+      lowerSet.has('https://www.googleapis.com/auth/drive.file') ||
+      lowerSet.has('drive.file') ||
+      lowerSet.has('https://www.googleapis.com/auth/drive') ||
+      lowerSet.has('drive')
+    );
+  }
+  return (
+    lowerSet.has(spec.uri.toLowerCase()) ||
+    lowerSet.has(spec.shortName.toLowerCase())
+  );
+}
+
+/**
+ * Evaluates stored OAuth scopes on a connected Google resource integration.
+ * - Drive requires `drive.file`
+ * - Docs requires `drive.file` and `documents`
+ * - Sheets requires `drive.file` and `spreadsheets`
+ */
+export function evaluateGoogleConnectionScopes(
+  service: GoogleResourceServiceKey,
+  rawScopes?: string[] | string | null
+): GoogleScopeEvaluationResult {
+  const scopes = normalizeScopesList(rawScopes);
+  if (scopes.length === 0) {
+    return {
+      hasRecordedScopes: false,
+      missingScopes: [],
+      needsReconnect: false,
+      message: null,
+    };
+  }
+
+  const required = REQUIRED_GOOGLE_RESOURCE_SCOPES[service] || [];
+  const missingScopes = required.filter(
+    (spec) => !hasNormalizedScope(scopes, spec)
+  );
+
+  if (missingScopes.length === 0) {
+    return {
+      hasRecordedScopes: true,
+      missingScopes: [],
+      needsReconnect: false,
+      message: null,
+    };
+  }
+
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+  const missingText = missingScopes.map((s) => s.label).join(' and ');
+
+  return {
+    hasRecordedScopes: true,
+    missingScopes,
+    needsReconnect: true,
+    message: `${serviceLabel} is missing required permission(s): ${missingText}. Reconnect ${serviceLabel} to grant updated access without affecting your other Google integrations.`,
+  };
+}
+
+export function isGoogleScopeReauthError(message?: string | null): boolean {
+  if (!message || typeof message !== 'string') return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('missing required oauth permission') ||
+    lower.includes('missing required permission') ||
+    lower.includes('insufficient_scope') ||
+    lower.includes('insufficient scope') ||
+    lower.includes('missing_scope') ||
+    lower.includes('missing scope') ||
+    lower.includes('drive.file') ||
+    lower.includes('requires drive.file') ||
+    lower.includes('reauthorize') ||
+    lower.includes('re-authorize')
+  );
+}
+
 export const GOOGLE_OAUTH_RETURN_STORAGE_KEY = 'zivofly_google_oauth_return';
 
 // Guard to prevent duplicate concurrent OAuth start requests
@@ -3232,7 +3396,7 @@ function mapIntegrationConnectionRow(
     account_email: extractGoogleAccountEmail(row),
     external_account_id: row.external_account_id || null,
     external_account_name: row.external_account_name || null,
-    scopes: Array.isArray(row.scopes) ? row.scopes : [],
+    scopes: normalizeScopesList(row.scopes, meta),
     connected_by: row.connected_by || null,
     last_error:
       typeof row.last_error === 'string' && row.last_error.trim()
@@ -3464,7 +3628,14 @@ export function syncGoogleWorkspaceConfigWithRecords(
           ? currentConfig?.drive?.selectedResourceIds
           : undefined,
     },
-    docs: buildAppEntry('google_docs'),
+    docs: {
+      ...buildAppEntry('google_docs'),
+      selectedResourceIds:
+        connectionsByService.google_docs &&
+        connectionsByService.google_docs.status !== 'disconnected'
+          ? currentConfig?.docs?.selectedResourceIds
+          : undefined,
+    },
     sheets: {
       ...existingSheets,
       enabled: sheetsRecord?.status === 'connected',
@@ -3480,6 +3651,9 @@ export function syncGoogleWorkspaceConfigWithRecords(
         : sheetsRecord?.last_synced_at ||
           sheetsRecord?.updated_at ||
           existingSheets.lastSyncedAt,
+      selectedResourceIds: !isSheetsDisconnected
+        ? currentConfig?.sheets?.selectedResourceIds
+        : undefined,
     },
     calendar: buildAppEntry('google_calendar'),
   };
@@ -4212,7 +4386,8 @@ function deriveResourceTypeLabel(mimeType: string, rawType?: string | null): str
 function mapAuthorizedResourceRow(
   row: any,
   fallbackWorkspaceId: string,
-  fallbackConnectionId: string
+  fallbackConnectionId: string,
+  fallbackService: GoogleResourceServiceKey
 ): GoogleAuthorizedResource | null {
   if (!row || typeof row !== 'object') return null;
 
@@ -4262,6 +4437,13 @@ function mapAuthorizedResourceRow(
       ? row.authorized_at.trim()
       : createdAt;
 
+  const rowService =
+    row.service === 'google_drive' ||
+    row.service === 'google_docs' ||
+    row.service === 'google_sheets_service'
+      ? row.service
+      : fallbackService;
+
   return {
     id,
     workspace_id:
@@ -4272,6 +4454,7 @@ function mapAuthorizedResourceRow(
       typeof row.connection_id === 'string' && row.connection_id.trim()
         ? row.connection_id.trim()
         : fallbackConnectionId,
+    service: rowService,
     google_file_id: googleFileId,
     name:
       typeof row.name === 'string' && row.name.trim()
@@ -4304,7 +4487,11 @@ function mapAuthorizedResourceRow(
   };
 }
 
-function mapGoogleResourceErrorMessage(diag: GoogleWorkspaceOAuthDiagnostic): string {
+function mapGoogleResourceErrorMessage(
+  diag: GoogleWorkspaceOAuthDiagnostic,
+  service: GoogleResourceServiceKey = 'google_drive'
+): string {
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
   const status = diag.httpStatus;
   const combined = [
     diag.userFacingMessage,
@@ -4327,14 +4514,26 @@ function mapGoogleResourceErrorMessage(diag: GoogleWorkspaceOAuthDiagnostic): st
   }
 
   if (
+    combined.includes('insufficient_scope') ||
+    combined.includes('insufficient scope') ||
+    combined.includes('missing_scope') ||
+    combined.includes('missing scope') ||
+    combined.includes('drive.file') ||
+    (combined.includes('scope') &&
+      (combined.includes('missing') || combined.includes('required')))
+  ) {
+    return `${serviceLabel} is missing required OAuth permission(s). Please reconnect ${serviceLabel} to grant updated access.`;
+  }
+
+  if (
     combined.includes('reauth') ||
     combined.includes('reconnect') ||
-    combined.includes('google') && combined.includes('expired') ||
+    (combined.includes('google') && combined.includes('expired')) ||
     combined.includes('invalid_grant') ||
     combined.includes('refresh token') ||
     combined.includes('token expired')
   ) {
-    return 'Your Google Drive authorization has expired. Please reconnect Google Drive to select or manage files.';
+    return `Your ${serviceLabel} authorization has expired. Please reconnect ${serviceLabel} to select or manage resources.`;
   }
 
   if (
@@ -4343,11 +4542,11 @@ function mapGoogleResourceErrorMessage(diag: GoogleWorkspaceOAuthDiagnostic): st
     combined.includes('permission') ||
     combined.includes('forbidden')
   ) {
-    return 'Google account or workspace permission was denied. Check your workspace role and Google Drive permissions.';
+    return `Google account or workspace permission was denied for ${serviceLabel}. Check your workspace role and ${serviceLabel} permissions.`;
   }
 
   if (status === 404 || combined.includes('not found')) {
-    return 'The requested Google Drive connection or resource was not found.';
+    return `The requested ${serviceLabel} connection or resource was not found.`;
   }
 
   return diag.userFacingMessage;
@@ -4360,18 +4559,27 @@ async function invokeGoogleWorkspaceResourceAction(params: {
     | 'save_selected_resources'
     | 'remove_selected_resource'
     | 'authorize_selected_resource';
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   agentId?: string | null;
   extraBody?: Record<string, any>;
-}): Promise<{ data: any; workspaceId: string; connectionId: string }> {
+}): Promise<{
+  data: any;
+  workspaceId: string;
+  connectionId: string;
+  service: GoogleResourceServiceKey;
+}> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+
   if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
     const configErr = new Error(
       'Supabase client is not configured (missing project URL or anon key).'
     );
     await buildGoogleWorkspaceEdgeDiagnostic({
       error: configErr,
-      service: 'google_drive',
+      service,
       hasAuthenticatedSession: false,
       workspaceId: params.workspaceId || null,
     });
@@ -4383,7 +4591,7 @@ async function invokeGoogleWorkspaceResourceAction(params: {
 
   if (!isValidUuid(normalizedConnectionId)) {
     throw new Error(
-      'Missing or invalid Google Drive connection ID. Connect Google Drive first.'
+      `Missing or invalid ${serviceLabel} connection ID. Connect ${serviceLabel} first.`
     );
   }
 
@@ -4405,11 +4613,11 @@ async function invokeGoogleWorkspaceResourceAction(params: {
 
     const diag = await buildGoogleWorkspaceEdgeDiagnostic({
       error: preErr,
-      service: 'google_drive',
+      service,
       hasAuthenticatedSession,
       workspaceId: resolvedWorkspaceId || params.workspaceId || null,
     });
-    throw new Error(mapGoogleResourceErrorMessage(diag));
+    throw new Error(mapGoogleResourceErrorMessage(diag, service));
   }
 
   if (!isValidUuid(resolvedWorkspaceId)) {
@@ -4433,11 +4641,11 @@ async function invokeGoogleWorkspaceResourceAction(params: {
       error,
       response,
       data,
-      service: 'google_drive',
+      service,
       hasAuthenticatedSession,
       workspaceId: resolvedWorkspaceId,
     });
-    throw new Error(mapGoogleResourceErrorMessage(diag));
+    throw new Error(mapGoogleResourceErrorMessage(diag, service));
   }
 
   if (!data || typeof data !== 'object') {
@@ -4448,7 +4656,7 @@ async function invokeGoogleWorkspaceResourceAction(params: {
       error: unexpectedErr,
       response,
       data,
-      service: 'google_drive',
+      service,
       hasAuthenticatedSession,
       workspaceId: resolvedWorkspaceId,
     });
@@ -4465,38 +4673,45 @@ async function invokeGoogleWorkspaceResourceAction(params: {
         ? data.reason
         : data.error
         ? JSON.stringify(data.error)
-        : `Google Workspace request (${params.action}) failed.`;
+        : `${serviceLabel} request (${params.action}) failed.`;
     const payloadErr = new Error(errMsg);
     const diag = await buildGoogleWorkspaceEdgeDiagnostic({
       error: payloadErr,
       response,
       data,
-      service: 'google_drive',
+      service,
       hasAuthenticatedSession,
       workspaceId: resolvedWorkspaceId,
     });
-    throw new Error(mapGoogleResourceErrorMessage(diag));
+    throw new Error(mapGoogleResourceErrorMessage(diag, service));
   }
 
   return {
     data,
     workspaceId: resolvedWorkspaceId,
     connectionId: normalizedConnectionId,
+    service,
   };
 }
 
 /**
- * Retrieves a short-lived Google OAuth access token from `google_workspace` (`action: "picker_token"`).
+ * Retrieves a short-lived Google OAuth access token from `google_workspace` (`action: "picker_token"`)
+ * strictly scoped to the provided service-specific `connectionId`.
  * Never persists the access token to browser storage.
  */
 export async function getGooglePickerToken(params: {
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   agentId?: string | null;
 }): Promise<GooglePickerTokenPayload> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+
   const { data, connectionId: normalizedConnectionId } =
     await invokeGoogleWorkspaceResourceAction({
       action: 'picker_token',
+      service,
       workspaceId: params.workspaceId,
       connectionId: params.connectionId,
       agentId: params.agentId,
@@ -4513,7 +4728,7 @@ export async function getGooglePickerToken(params: {
 
   if (!accessToken) {
     throw new Error(
-      'Backend did not return a short-lived Google Picker access token. Your Google authorization may need to be reconnected.'
+      `Backend did not return a short-lived ${serviceLabel} Picker access token. Your ${serviceLabel} authorization may need to be reconnected.`
     );
   }
 
@@ -4527,7 +4742,7 @@ export async function getGooglePickerToken(params: {
     returnedConnectionId !== normalizedConnectionId
   ) {
     throw new Error(
-      'Google Picker token connection mismatch. Please refresh Google Workspace integrations and try again.'
+      `${serviceLabel} Picker token connection mismatch. Please refresh Google Workspace integrations and try again.`
     );
   }
 
@@ -4578,17 +4793,20 @@ export async function getGooglePickerToken(params: {
 }
 
 /**
- * Lists authorized Google Drive resources for the active workspace and Google Drive connection
+ * Lists authorized resources for the active workspace and service-specific `connectionId`
  * via `google_workspace` (`action: "list_selected_resources"`).
  */
 export async function getGoogleSelectedResources(params: {
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   agentId?: string | null;
 }): Promise<GoogleSelectedResourcesResult> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
   const { data, workspaceId, connectionId } =
     await invokeGoogleWorkspaceResourceAction({
       action: 'list_selected_resources',
+      service,
       workspaceId: params.workspaceId,
       connectionId: params.connectionId,
       agentId: params.agentId,
@@ -4596,7 +4814,9 @@ export async function getGoogleSelectedResources(params: {
 
   const rawList = Array.isArray(data.resources) ? data.resources : [];
   const resources: GoogleAuthorizedResource[] = rawList
-    .map((item: any) => mapAuthorizedResourceRow(item, workspaceId, connectionId))
+    .map((item: any) =>
+      mapAuthorizedResourceRow(item, workspaceId, connectionId, service)
+    )
     .filter((item: GoogleAuthorizedResource | null): item is GoogleAuthorizedResource =>
       Boolean(item)
     );
@@ -4616,6 +4836,7 @@ export async function getGoogleSelectedResources(params: {
   return {
     workspaceId,
     connectionId,
+    service,
     resources,
     selectedCount,
     activeCount,
@@ -4624,10 +4845,12 @@ export async function getGoogleSelectedResources(params: {
 }
 
 /**
- * Saves customer-selected Google Drive file IDs via `google_workspace` (`action: "save_selected_resources"`).
- * Sends only `google_file_id` so the backend verifies real file metadata with Google Drive before persisting.
+ * Saves customer-selected Google file IDs via `google_workspace` (`action: "save_selected_resources"`)
+ * against the service-specific `connectionId`.
+ * Sends only `google_file_id` so the backend verifies real file metadata with Google before persisting.
  */
 export async function saveGoogleSelectedResources(params: {
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   selectedFiles: Array<{ id: string }>;
@@ -4635,9 +4858,15 @@ export async function saveGoogleSelectedResources(params: {
 }): Promise<{
   workspaceId: string;
   connectionId: string;
+  service: GoogleResourceServiceKey;
   savedCount: number;
+  rejectedCount: number;
+  rejectedReasons: string[];
   message: string;
 }> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+
   const uniqueIds = Array.from(
     new Set(
       (params.selectedFiles || [])
@@ -4647,12 +4876,12 @@ export async function saveGoogleSelectedResources(params: {
   );
 
   if (uniqueIds.length === 0) {
-    throw new Error('Please select at least one file to authorize.');
+    throw new Error(`Please select at least one ${serviceLabel} item to authorize.`);
   }
 
-  const saveLockKey = `${params.connectionId}:${uniqueIds.join(',')}`;
+  const saveLockKey = `${service}:${params.connectionId}:${uniqueIds.join(',')}`;
   if (inFlightResourceSaveKeys.has(saveLockKey)) {
-    throw new Error('Saving selected resources is already in progress.');
+    throw new Error(`Saving selected ${serviceLabel} resources is already in progress.`);
   }
 
   inFlightResourceSaveKeys.add(saveLockKey);
@@ -4660,6 +4889,7 @@ export async function saveGoogleSelectedResources(params: {
     const { data, workspaceId, connectionId } =
       await invokeGoogleWorkspaceResourceAction({
         action: 'save_selected_resources',
+        service,
         workspaceId: params.workspaceId,
         connectionId: params.connectionId,
         agentId: params.agentId,
@@ -4670,21 +4900,68 @@ export async function saveGoogleSelectedResources(params: {
         },
       });
 
+    const rawRejected = Array.isArray(data.rejected)
+      ? data.rejected
+      : Array.isArray(data.rejected_resources)
+      ? data.rejected_resources
+      : Array.isArray(data.errors)
+      ? data.errors
+      : [];
+
+    const rejectedReasons: string[] = rawRejected
+      .map((item: any) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          return (
+            item.reason ||
+            item.message ||
+            item.error ||
+            item.name ||
+            item.google_file_id ||
+            ''
+          )
+            .toString()
+            .trim();
+        }
+        return '';
+      })
+      .filter(Boolean);
+
     const savedCount =
       typeof data.saved_count === 'number'
         ? data.saved_count
         : Array.isArray(data.resources)
         ? data.resources.length
+        : rejectedReasons.length > 0
+        ? Math.max(0, uniqueIds.length - rejectedReasons.length)
         : uniqueIds.length;
+
+    const rejectedCount =
+      typeof data.rejected_count === 'number'
+        ? data.rejected_count
+        : rawRejected.length;
+
+    if (savedCount === 0 && rejectedReasons.length > 0) {
+      throw new Error(
+        typeof data.message === 'string' && data.message.trim()
+          ? data.message.trim()
+          : `${serviceLabel} rejected the selected file(s): ${rejectedReasons.join(
+              '; '
+            )}`
+      );
+    }
 
     return {
       workspaceId,
       connectionId,
+      service,
       savedCount,
+      rejectedCount,
+      rejectedReasons,
       message:
         typeof data.message === 'string' && data.message.trim()
           ? data.message.trim()
-          : `Authorized ${savedCount} Google Drive ${
+          : `Authorized ${savedCount} ${serviceLabel} ${
               savedCount === 1 ? 'resource' : 'resources'
             } successfully.`,
     };
@@ -4694,11 +4971,12 @@ export async function saveGoogleSelectedResources(params: {
 }
 
 /**
- * Revokes Zivofly's authorization for an individual Google Drive resource
+ * Revokes Zivofly's authorization for an individual resource belonging to `connectionId`
  * via `google_workspace` (`action: "remove_selected_resource"`).
- * Does not delete the underlying Google Drive file.
+ * Does not delete the underlying Google file or affect other service connections.
  */
 export async function removeGoogleSelectedResource(params: {
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   resourceId: string;
@@ -4706,9 +4984,13 @@ export async function removeGoogleSelectedResource(params: {
 }): Promise<{
   workspaceId: string;
   connectionId: string;
+  service: GoogleResourceServiceKey;
   resourceId: string;
   message: string;
 }> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
+  const serviceLabel = GOOGLE_WORKSPACE_SERVICE_LABELS[service];
+
   const normalizedResourceId =
     typeof params.resourceId === 'string' ? params.resourceId.trim() : '';
 
@@ -4716,15 +4998,17 @@ export async function removeGoogleSelectedResource(params: {
     throw new Error('Missing resource ID to remove.');
   }
 
-  if (inFlightResourceRemoveIds.has(normalizedResourceId)) {
+  const removeLockKey = `${params.connectionId}:${normalizedResourceId}`;
+  if (inFlightResourceRemoveIds.has(removeLockKey)) {
     throw new Error('Resource removal is already in progress.');
   }
 
-  inFlightResourceRemoveIds.add(normalizedResourceId);
+  inFlightResourceRemoveIds.add(removeLockKey);
   try {
     const { data, workspaceId, connectionId } =
       await invokeGoogleWorkspaceResourceAction({
         action: 'remove_selected_resource',
+        service,
         workspaceId: params.workspaceId,
         connectionId: params.connectionId,
         agentId: params.agentId,
@@ -4736,14 +5020,15 @@ export async function removeGoogleSelectedResource(params: {
     return {
       workspaceId,
       connectionId,
+      service,
       resourceId: normalizedResourceId,
       message:
         typeof data.message === 'string' && data.message.trim()
           ? data.message.trim()
-          : 'Resource authorization removed successfully.',
+          : `${serviceLabel} resource authorization removed successfully.`,
     };
   } finally {
-    inFlightResourceRemoveIds.delete(normalizedResourceId);
+    inFlightResourceRemoveIds.delete(removeLockKey);
   }
 }
 
@@ -4752,15 +5037,18 @@ export async function removeGoogleSelectedResource(params: {
  * via `google_workspace` (`action: "authorize_selected_resource"`).
  */
 export async function authorizeGoogleSelectedResource(params: {
+  service?: GoogleResourceServiceKey;
   workspaceId?: string | null;
   connectionId: string;
   resourceId?: string;
   googleFileId?: string;
   agentId?: string | null;
 }): Promise<{ authorized: boolean; resource?: GoogleAuthorizedResource | null }> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
   const { data, workspaceId, connectionId } =
     await invokeGoogleWorkspaceResourceAction({
       action: 'authorize_selected_resource',
+      service,
       workspaceId: params.workspaceId,
       connectionId: params.connectionId,
       agentId: params.agentId,
@@ -4773,7 +5061,7 @@ export async function authorizeGoogleSelectedResource(params: {
   return {
     authorized: Boolean(data.authorized ?? data.allowed ?? data.active),
     resource: data.resource
-      ? mapAuthorizedResourceRow(data.resource, workspaceId, connectionId)
+      ? mapAuthorizedResourceRow(data.resource, workspaceId, connectionId, service)
       : null,
   };
 }

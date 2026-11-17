@@ -25,8 +25,16 @@ declare global {
   }
 }
 
+import { GoogleResourceServiceKey } from '../types';
+
+export const GOOGLE_DOC_MIME_TYPE = 'application/vnd.google-apps.document';
+export const GOOGLE_SHEET_MIME_TYPE = 'application/vnd.google-apps.spreadsheet';
+export const GOOGLE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
 export interface GooglePickerSelectedFile {
   id: string;
+  mimeType?: string | null;
+  name?: string | null;
 }
 
 export interface GooglePickerOpenResult {
@@ -34,7 +42,11 @@ export interface GooglePickerOpenResult {
   files: GooglePickerSelectedFile[];
 }
 
-export type GooglePickerInitialView = 'all' | 'documents' | 'spreadsheets';
+export type GooglePickerInitialView =
+  | 'drive'
+  | 'all'
+  | 'documents'
+  | 'spreadsheets';
 
 export interface GooglePickerConfig {
   apiKey: string | null;
@@ -57,11 +69,123 @@ export interface VerifiedGooglePickerTokenInfo {
   email: string | null;
   scope: string | null;
   hasDriveScope: boolean;
+  hasDocumentsScope: boolean;
+  hasSpreadsheetsScope: boolean;
+  missingScopes: string[];
+  needsReconnect?: boolean;
   azp: string | null;
   projectNumber: string | null;
   expiresIn: number | null;
   skippedNetworkCheck?: boolean;
   error?: string;
+}
+
+export interface PickerFileFilterResult {
+  validFiles: GooglePickerSelectedFile[];
+  rejectedFiles: Array<GooglePickerSelectedFile & { reason: string }>;
+  rejectionMessage: string | null;
+}
+
+function getGoogleServiceLabel(service: GoogleResourceServiceKey): string {
+  if (service === 'google_docs') return 'Google Docs';
+  if (service === 'google_sheets_service') return 'Google Sheets';
+  return 'Google Drive';
+}
+
+function formatRejectedFileNames(
+  files: Array<GooglePickerSelectedFile>
+): string {
+  const names = files
+    .map((f) => (typeof f.name === 'string' && f.name.trim() ? f.name.trim() : f.id))
+    .slice(0, 3);
+  const extra = files.length - names.length;
+  if (names.length === 0) return '';
+  return extra > 0 ? `${names.join(', ')} (+${extra} more)` : names.join(', ');
+}
+
+/**
+ * Enforces strict service-level file rules on items returned by Google Picker
+ * before any file ID is sent to `google_workspace` (`save_selected_resources`):
+ * - Google Drive: rejects native Google Docs and native Google Sheets.
+ * - Google Docs: rejects any non-native Google Docs files.
+ * - Google Sheets: rejects any non-native Google Sheets files.
+ * The backend independently verifies real Google metadata for all file IDs.
+ */
+export function filterAndValidatePickerFiles(
+  service: GoogleResourceServiceKey,
+  files: GooglePickerSelectedFile[]
+): PickerFileFilterResult {
+  const validFiles: GooglePickerSelectedFile[] = [];
+  const rejectedFiles: Array<GooglePickerSelectedFile & { reason: string }> = [];
+
+  for (const file of files || []) {
+    const id = typeof file?.id === 'string' ? file.id.trim() : '';
+    if (!id) continue;
+
+    const mime =
+      typeof file.mimeType === 'string' ? file.mimeType.trim().toLowerCase() : '';
+
+    if (service === 'google_drive') {
+      if (mime === GOOGLE_DOC_MIME_TYPE || mime === GOOGLE_SHEET_MIME_TYPE) {
+        rejectedFiles.push({
+          ...file,
+          id,
+          reason:
+            mime === GOOGLE_DOC_MIME_TYPE
+              ? 'Native Google Docs must be selected from Google Docs.'
+              : 'Native Google Sheets must be selected from Google Sheets.',
+        });
+        continue;
+      }
+      validFiles.push({ ...file, id });
+      continue;
+    }
+
+    if (service === 'google_docs') {
+      if (mime && mime !== GOOGLE_DOC_MIME_TYPE) {
+        rejectedFiles.push({
+          ...file,
+          id,
+          reason: 'Only native Google Docs documents can be selected in Google Docs.',
+        });
+        continue;
+      }
+      validFiles.push({ ...file, id });
+      continue;
+    }
+
+    if (service === 'google_sheets_service') {
+      if (mime && mime !== GOOGLE_SHEET_MIME_TYPE) {
+        rejectedFiles.push({
+          ...file,
+          id,
+          reason:
+            'Only native Google Sheets spreadsheets can be selected in Google Sheets.',
+        });
+        continue;
+      }
+      validFiles.push({ ...file, id });
+      continue;
+    }
+  }
+
+  let rejectionMessage: string | null = null;
+  if (rejectedFiles.length > 0) {
+    const names = formatRejectedFileNames(rejectedFiles);
+    if (service === 'google_drive') {
+      rejectionMessage = `Native Google Docs and Google Sheets cannot be selected in Google Drive (${names}). Please select them from the Google Docs or Google Sheets cards instead.`;
+    } else if (service === 'google_docs') {
+      rejectionMessage = `Only native Google Docs documents can be selected in Google Docs (${names} rejected).`;
+    } else {
+      rejectionMessage = `Only native Google Sheets spreadsheets can be selected in Google Sheets (${names} rejected).`;
+    }
+  }
+
+  return {
+    validFiles,
+    rejectedFiles,
+    rejectionMessage,
+  };
 }
 
 const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js';
@@ -270,10 +394,13 @@ export function validateGooglePickerConfig(
  * via Google's tokeninfo endpoint (sent via POST body so the token never appears in URLs or logs).
  */
 export async function verifyGooglePickerAccessToken(params: {
+  service?: GoogleResourceServiceKey;
   accessToken: string;
   expectedAccountEmail?: string | null;
   expectedAppId?: string | null;
 }): Promise<VerifiedGooglePickerTokenInfo> {
+  const service: GoogleResourceServiceKey = params.service || 'google_drive';
+  const serviceLabel = getGoogleServiceLabel(service);
   const token = normalizeCredentialValue(params.accessToken);
   if (!token) {
     return {
@@ -281,10 +408,13 @@ export async function verifyGooglePickerAccessToken(params: {
       email: null,
       scope: null,
       hasDriveScope: false,
+      hasDocumentsScope: false,
+      hasSpreadsheetsScope: false,
+      missingScopes: [],
       azp: null,
       projectNumber: null,
       expiresIn: null,
-      error: 'Missing Google access token from picker_token response.',
+      error: `Missing Google access token from ${serviceLabel} picker_token response.`,
     };
   }
 
@@ -309,10 +439,14 @@ export async function verifyGooglePickerAccessToken(params: {
         email: null,
         scope: null,
         hasDriveScope: false,
+        hasDocumentsScope: false,
+        hasSpreadsheetsScope: false,
+        missingScopes: [],
+        needsReconnect: true,
         azp: null,
         projectNumber: null,
         expiresIn: null,
-        error: `Google Drive access token is invalid or expired (${desc}). Please reconnect Google Drive.`,
+        error: `${serviceLabel} access token is invalid or expired (${desc}). Please reconnect ${serviceLabel}.`,
       };
     }
 
@@ -321,9 +455,27 @@ export async function verifyGooglePickerAccessToken(params: {
     const hasDriveScope = scopeList.some(
       (s) =>
         s === 'https://www.googleapis.com/auth/drive.file' ||
-        s === 'https://www.googleapis.com/auth/drive' ||
-        s === 'https://www.googleapis.com/auth/drive.readonly'
+        s === 'https://www.googleapis.com/auth/drive'
     );
+    const hasDocumentsScope = scopeList.some(
+      (s) => s === 'https://www.googleapis.com/auth/documents'
+    );
+    const hasSpreadsheetsScope = scopeList.some(
+      (s) => s === 'https://www.googleapis.com/auth/spreadsheets'
+    );
+
+    const missingScopes: string[] = [];
+    if (scopeStr) {
+      if (!hasDriveScope) {
+        missingScopes.push('drive.file');
+      }
+      if (service === 'google_docs' && !hasDocumentsScope) {
+        missingScopes.push('documents');
+      }
+      if (service === 'google_sheets_service' && !hasSpreadsheetsScope) {
+        missingScopes.push('spreadsheets');
+      }
+    }
 
     const azp = typeof data?.azp === 'string' ? data.azp.trim() : null;
     const projectNumber = extractGoogleProjectNumber(azp, null);
@@ -345,24 +497,33 @@ export async function verifyGooglePickerAccessToken(params: {
         email: tokenEmail,
         scope: scopeStr,
         hasDriveScope,
+        hasDocumentsScope,
+        hasSpreadsheetsScope,
+        missingScopes,
+        needsReconnect: true,
         azp,
         projectNumber,
         expiresIn,
-        error: `Connected Google Drive account (${params.expectedAccountEmail}) does not match the token account (${tokenEmail}). Please reconnect Google Drive.`,
+        error: `Connected ${serviceLabel} account (${params.expectedAccountEmail}) does not match the token account (${tokenEmail}). Please reconnect ${serviceLabel}.`,
       };
     }
 
-    if (scopeStr && !hasDriveScope) {
+    if (scopeStr && missingScopes.length > 0) {
       return {
         valid: false,
         email: tokenEmail,
         scope: scopeStr,
-        hasDriveScope: false,
+        hasDriveScope,
+        hasDocumentsScope,
+        hasSpreadsheetsScope,
+        missingScopes,
+        needsReconnect: true,
         azp,
         projectNumber,
         expiresIn,
-        error:
-          'Google Drive OAuth token does not include Drive file permission (drive.file). Please reconnect Google Drive and approve Drive permissions.',
+        error: `${serviceLabel} is missing required OAuth permission(s): ${missingScopes.join(
+          ', '
+        )}. Please reconnect ${serviceLabel} to grant updated access.`,
       };
     }
 
@@ -374,6 +535,7 @@ export async function verifyGooglePickerAccessToken(params: {
       console.warn(
         '[Google Picker] Project number mismatch between configured VITE_GOOGLE_CLIENT_ID and picker_token OAuth client:',
         {
+          service,
           configuredAppId: params.expectedAppId,
           tokenProjectNumber: projectNumber,
         }
@@ -385,6 +547,9 @@ export async function verifyGooglePickerAccessToken(params: {
       email: tokenEmail,
       scope: scopeStr,
       hasDriveScope,
+      hasDocumentsScope,
+      hasSpreadsheetsScope,
+      missingScopes: [],
       azp,
       projectNumber,
       expiresIn,
@@ -392,6 +557,7 @@ export async function verifyGooglePickerAccessToken(params: {
   } catch (err: any) {
     // Do not block Picker if corporate proxy / extension blocks oauth2.googleapis.com/tokeninfo
     console.warn('[Google Picker] Token preflight verification skipped:', {
+      service,
       reason: err?.message || 'Network check unavailable',
     });
     return {
@@ -399,6 +565,9 @@ export async function verifyGooglePickerAccessToken(params: {
       email: null,
       scope: null,
       hasDriveScope: true,
+      hasDocumentsScope: service !== 'google_docs' ? false : true,
+      hasSpreadsheetsScope: service !== 'google_sheets_service' ? false : true,
+      missingScopes: [],
       azp: null,
       projectNumber: null,
       expiresIn: null,
@@ -523,13 +692,24 @@ export function loadGooglePickerApi(): Promise<void> {
   return pickerLoaderPromise;
 }
 
-function configureBaseDocsView(view: any, googlePicker: any): any {
+function configureBaseDocsView(
+  view: any,
+  googlePicker: any,
+  options?: {
+    includeFolders?: boolean;
+    mimeTypes?: string;
+  }
+): any {
+  const includeFolders = options?.includeFolders ?? true;
   if (typeof view.setIncludeFolders === 'function') {
-    view.setIncludeFolders(true);
+    view.setIncludeFolders(includeFolders);
   }
   // Keep folder navigation interactive (open folders to pick files inside instead of selecting folders)
   if (typeof view.setSelectFolderEnabled === 'function') {
     view.setSelectFolderEnabled(false);
+  }
+  if (options?.mimeTypes && typeof view.setMimeTypes === 'function') {
+    view.setMimeTypes(options.mimeTypes);
   }
   if (
     googlePicker?.DocsViewMode?.LIST &&
@@ -541,14 +721,12 @@ function configureBaseDocsView(view: any, googlePicker: any): any {
 }
 
 /**
- * Opens the Google Picker modal configured with multi-file selection and proper tabs:
- * - My Drive (default for Drive): user's files and folders starting at root
- * - Recent / All Drive files: accessible files sorted by recency
- * - Shared with me: files shared with the connected account
- * - Starred: starred files in the connected account
- * - Shared drives: separate tab for organizational Shared Drives
- * When launched from Google Docs or Google Sheets, opens directly on Docs or Sheets view first.
- * Uses only the short-lived OAuth access token in memory and returns only selected file IDs.
+ * Opens an isolated Google Picker modal strictly configured for the target service:
+ * - `'drive'` / `'all'`: Drive files & folders across My Drive, Recent, Shared with me, Starred, and Shared drives.
+ *   (Native Google Docs & Sheets are rejected before saving.)
+ * - `'documents'`: Native Google Docs only (`application/vnd.google-apps.document`) across Docs, My Drive, Shared with me, Starred, and Shared drives.
+ * - `'spreadsheets'`: Native Google Sheets only (`application/vnd.google-apps.spreadsheet`) across Sheets, My Drive, Shared with me, Starred, and Shared drives.
+ * Uses only the short-lived OAuth access token in memory for that specific connection ID.
  */
 export async function openGooglePicker(params: {
   accessToken: string;
@@ -581,95 +759,181 @@ export async function openGooglePicker(params: {
     );
   }
 
+  const mode: 'drive' | 'documents' | 'spreadsheets' =
+    params.initialView === 'documents'
+      ? 'documents'
+      : params.initialView === 'spreadsheets'
+      ? 'spreadsheets'
+      : 'drive';
+
   console.info('[Google Picker] Opening Picker modal:', {
     appId: validatedConfig.appId,
     hasClientId: Boolean(validatedConfig.clientId),
     hasApiKey: Boolean(validatedConfig.apiKey),
     origin: validatedConfig.origin,
-    initialView: params.initialView || 'all',
+    mode,
   });
 
   return new Promise<GooglePickerOpenResult>((resolve, reject) => {
     let settled = false;
 
     try {
-      // 1. My Drive — normal files & folders belonging to the connected account (default Drive view)
-      const myDriveView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCS),
-        googlePicker
-      );
-      if (typeof myDriveView.setParent === 'function') {
-        myDriveView.setParent('root');
+      let orderedViews: any[] = [];
+
+      if (mode === 'documents') {
+        // Strictly native Google Docs across every tab
+        const docsPrimaryView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCUMENTS),
+          googlePicker,
+          { includeFolders: false, mimeTypes: GOOGLE_DOC_MIME_TYPE }
+        );
+
+        const docsMyDriveView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_DOC_MIME_TYPE }
+        );
+        if (typeof docsMyDriveView.setParent === 'function') {
+          docsMyDriveView.setParent('root');
+        }
+
+        const docsSharedWithMeView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_DOC_MIME_TYPE }
+        );
+        if (typeof docsSharedWithMeView.setOwnedByMe === 'function') {
+          docsSharedWithMeView.setOwnedByMe(false);
+        }
+
+        const docsStarredView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: false, mimeTypes: GOOGLE_DOC_MIME_TYPE }
+        );
+        if (typeof docsStarredView.setStarred === 'function') {
+          docsStarredView.setStarred(true);
+        }
+
+        const docsSharedDrivesView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_DOC_MIME_TYPE }
+        );
+        if (typeof docsSharedDrivesView.setEnableDrives === 'function') {
+          docsSharedDrivesView.setEnableDrives(true);
+        }
+
+        orderedViews = [
+          docsPrimaryView,
+          docsMyDriveView,
+          docsSharedWithMeView,
+          docsStarredView,
+          docsSharedDrivesView,
+        ];
+      } else if (mode === 'spreadsheets') {
+        // Strictly native Google Sheets across every tab
+        const sheetsPrimaryView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.SPREADSHEETS),
+          googlePicker,
+          { includeFolders: false, mimeTypes: GOOGLE_SHEET_MIME_TYPE }
+        );
+
+        const sheetsMyDriveView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_SHEET_MIME_TYPE }
+        );
+        if (typeof sheetsMyDriveView.setParent === 'function') {
+          sheetsMyDriveView.setParent('root');
+        }
+
+        const sheetsSharedWithMeView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_SHEET_MIME_TYPE }
+        );
+        if (typeof sheetsSharedWithMeView.setOwnedByMe === 'function') {
+          sheetsSharedWithMeView.setOwnedByMe(false);
+        }
+
+        const sheetsStarredView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: false, mimeTypes: GOOGLE_SHEET_MIME_TYPE }
+        );
+        if (typeof sheetsStarredView.setStarred === 'function') {
+          sheetsStarredView.setStarred(true);
+        }
+
+        const sheetsSharedDrivesView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true, mimeTypes: GOOGLE_SHEET_MIME_TYPE }
+        );
+        if (typeof sheetsSharedDrivesView.setEnableDrives === 'function') {
+          sheetsSharedDrivesView.setEnableDrives(true);
+        }
+
+        orderedViews = [
+          sheetsPrimaryView,
+          sheetsMyDriveView,
+          sheetsSharedWithMeView,
+          sheetsStarredView,
+          sheetsSharedDrivesView,
+        ];
+      } else {
+        // Google Drive mode — My Drive, Recent, Shared with me, Starred, and Shared drives
+        const myDriveView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true }
+        );
+        if (typeof myDriveView.setParent === 'function') {
+          myDriveView.setParent('root');
+        }
+
+        const recentDriveView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true }
+        );
+
+        const sharedWithMeView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true }
+        );
+        if (typeof sharedWithMeView.setOwnedByMe === 'function') {
+          sharedWithMeView.setOwnedByMe(false);
+        }
+
+        const starredView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true }
+        );
+        if (typeof starredView.setStarred === 'function') {
+          starredView.setStarred(true);
+        }
+
+        const sharedDrivesView = configureBaseDocsView(
+          new googlePicker.DocsView(googlePicker.ViewId.DOCS),
+          googlePicker,
+          { includeFolders: true }
+        );
+        if (typeof sharedDrivesView.setEnableDrives === 'function') {
+          sharedDrivesView.setEnableDrives(true);
+        }
+
+        orderedViews = [
+          myDriveView,
+          recentDriveView,
+          sharedWithMeView,
+          starredView,
+          sharedDrivesView,
+        ];
       }
-
-      // 2. Recent / All accessible Drive files (Docs, Sheets, PDFs, Images, Videos, ZIPs, etc.)
-      const recentDriveView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCS),
-        googlePicker
-      );
-
-      // 3. Shared with me — files shared with the connected account
-      const sharedWithMeView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCS),
-        googlePicker
-      );
-      if (typeof sharedWithMeView.setOwnedByMe === 'function') {
-        sharedWithMeView.setOwnedByMe(false);
-      }
-
-      // 4. Starred — starred files
-      const starredView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCS),
-        googlePicker
-      );
-      if (typeof starredView.setStarred === 'function') {
-        starredView.setStarred(true);
-      }
-
-      // 5. Shared drives — dedicated separate view (MUST only be enabled on this view)
-      const sharedDrivesView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCS),
-        googlePicker
-      );
-      if (typeof sharedDrivesView.setEnableDrives === 'function') {
-        sharedDrivesView.setEnableDrives(true);
-      }
-
-      // Google Docs & Google Sheets focused views for Docs/Sheets card buttons
-      const docsView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.DOCUMENTS),
-        googlePicker
-      );
-
-      const sheetsView = configureBaseDocsView(
-        new googlePicker.DocsView(googlePicker.ViewId.SPREADSHEETS),
-        googlePicker
-      );
-
-      const orderedViews =
-        params.initialView === 'documents'
-          ? [
-              docsView,
-              myDriveView,
-              sharedWithMeView,
-              starredView,
-              sharedDrivesView,
-            ]
-          : params.initialView === 'spreadsheets'
-          ? [
-              sheetsView,
-              myDriveView,
-              sharedWithMeView,
-              starredView,
-              sharedDrivesView,
-            ]
-          : [
-              myDriveView,
-              recentDriveView,
-              sharedWithMeView,
-              starredView,
-              sharedDrivesView,
-            ];
 
       const builder = new googlePicker.PickerBuilder()
         .setOAuthToken(accessToken)
@@ -677,11 +941,11 @@ export async function openGooglePicker(params: {
         .setAppId(validatedConfig.appId)
         .enableFeature(googlePicker.Feature.MULTISELECT_ENABLED)
         .setTitle(
-          params.initialView === 'documents'
+          mode === 'documents'
             ? 'Select Google Docs for Zivofly'
-            : params.initialView === 'spreadsheets'
+            : mode === 'spreadsheets'
             ? 'Select Google Sheets for Zivofly'
-            : 'Select Google Drive files for Zivofly'
+            : 'Select Drive Files for Zivofly'
         );
 
       if (googlePicker.Feature?.SUPPORT_DRIVES) {
@@ -719,10 +983,22 @@ export async function openGooglePicker(params: {
 
           const files: GooglePickerSelectedFile[] = rawDocs
             .map((doc: any) => {
-              const fileId = doc?.[googlePicker.Document.ID];
-              return typeof fileId === 'string' && fileId.trim()
-                ? { id: fileId.trim() }
-                : null;
+              const fileId = doc?.[googlePicker.Document.ID] ?? doc?.id;
+              if (typeof fileId !== 'string' || !fileId.trim()) return null;
+              const mimeRaw =
+                doc?.[googlePicker.Document.MIME_TYPE] ?? doc?.mimeType;
+              const nameRaw = doc?.[googlePicker.Document.NAME] ?? doc?.name;
+              return {
+                id: fileId.trim(),
+                mimeType:
+                  typeof mimeRaw === 'string' && mimeRaw.trim()
+                    ? mimeRaw.trim()
+                    : null,
+                name:
+                  typeof nameRaw === 'string' && nameRaw.trim()
+                    ? nameRaw.trim()
+                    : null,
+              };
             })
             .filter(
               (
@@ -730,7 +1006,8 @@ export async function openGooglePicker(params: {
               ): item is GooglePickerSelectedFile => Boolean(item)
             );
 
-          console.info('[Google Picker] Selected file IDs:', {
+          console.info('[Google Picker] Picked items:', {
+            mode,
             count: files.length,
           });
 
@@ -749,6 +1026,7 @@ export async function openGooglePicker(params: {
           data?.error
         ) {
           console.error('[Google Picker] Picker callback error:', {
+            mode,
             action,
             error: data?.error || data,
             appId: validatedConfig.appId,
@@ -758,7 +1036,7 @@ export async function openGooglePicker(params: {
             settled = true;
             reject(
               new Error(
-                'Google Picker encountered an error while loading Drive files. Verify that Google Picker API is enabled in Google Cloud Console, the API key allows this site origin, and your Google Drive authorization is active.'
+                'Google Picker encountered an error while loading files. Verify that Google Picker API is enabled in Google Cloud Console, the API key allows this site origin, and your Google authorization is active.'
               )
             );
           }
@@ -769,6 +1047,7 @@ export async function openGooglePicker(params: {
       picker.setVisible(true);
     } catch (err: any) {
       console.error('[Google Picker] Failed to initialize PickerBuilder:', {
+        mode,
         message: err?.message,
         appId: validatedConfig.appId,
         origin: validatedConfig.origin,

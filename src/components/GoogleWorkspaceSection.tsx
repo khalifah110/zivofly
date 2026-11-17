@@ -8,13 +8,11 @@ import {
   RefreshCw,
   Unplug,
   X,
-  Plus,
-  ExternalLink,
-  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   GoogleAuthorizedResource,
+  GoogleResourceServiceKey,
   GoogleWorkspaceConfig,
   GoogleWorkspaceIntegrationStatus,
   GoogleWorkspaceServiceIdentifier,
@@ -38,12 +36,13 @@ import {
   startGoogleWorkspaceOAuth,
   syncGoogleWorkspaceConfigWithRecords,
 } from '../lib/supabaseService';
-import { useGoogleSelectedResources } from '../hooks/useGoogleSelectedResources';
+import {
+  useGoogleSelectedResources,
+  UseGoogleSelectedResourcesReturn,
+} from '../hooks/useGoogleSelectedResources';
 import {
   AuthorizedResourcesSection,
   RemoveGoogleResourceModal,
-  formatSelectionDate,
-  renderResourceMimeIcon,
 } from './AuthorizedResourcesSection';
 
 interface GoogleWorkspaceSectionProps {
@@ -87,8 +86,10 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     useState<DisconnectTarget | null>(null);
   const [disconnectingService, setDisconnectingService] =
     useState<GoogleWorkspaceServiceIdentifier | null>(null);
-  const [resourceToRemove, setResourceToRemove] =
-    useState<GoogleAuthorizedResource | null>(null);
+  const [resourceToRemove, setResourceToRemove] = useState<{
+    service: GoogleResourceServiceKey;
+    resource: GoogleAuthorizedResource;
+  } | null>(null);
   const [oauthDiagnosticError, setOauthDiagnosticError] = useState<{
     appName: string;
     service: GoogleWorkspaceServiceIdentifier;
@@ -124,53 +125,153 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     []
   );
 
-  // Sync agent-level selected resource IDs whenever active authorized resources change
-  const handleResourcesUpdated = useCallback((activeResourceIds: string[]) => {
-    const currentDrive = valueRef.current?.drive;
-    if (!onChangeRef.current || !currentDrive) return;
+  const getConnectionDerivedState = (service: GoogleResourceServiceKey) => {
+    const rec = connectionsByService[service];
+    const status: GoogleWorkspaceIntegrationStatus =
+      !rec || rec.status === 'disconnected' ? 'disconnected' : rec.status;
+    return {
+      record: rec,
+      status,
+      connectionId: status !== 'disconnected' ? rec?.id || null : null,
+      workspaceId: rec?.workspace_id || resolvedWorkspaceId || workspaceId || null,
+      accountEmail: rec?.account_email || null,
+      scopes: rec?.scopes,
+    };
+  };
 
-    const existingSelected = currentDrive.selectedResourceIds;
-    if (!Array.isArray(existingSelected)) return;
+  const driveState = getConnectionDerivedState('google_drive');
+  const docsState = getConnectionDerivedState('google_docs');
+  const sheetsState = getConnectionDerivedState('google_sheets_service');
 
-    const activeSet = new Set(activeResourceIds);
-    const pruned = existingSelected.filter((id) => activeSet.has(id));
-    if (pruned.length !== existingSelected.length) {
-      onChangeRef.current({
-        ...(valueRef.current || {}),
-        drive: {
-          ...currentDrive,
-          selectedResourceIds: pruned,
-        },
-      });
-    }
-  }, []);
+  const createResourcesUpdatedHandler = useCallback(
+    (service: GoogleResourceServiceKey) => (activeResourceIds: string[]) => {
+      if (!onChangeRef.current) return;
+      const activeSet = new Set(activeResourceIds);
 
-  const driveRecord = connectionsByService.google_drive;
-  const driveStatus: GoogleWorkspaceIntegrationStatus =
-    !driveRecord || driveRecord.status === 'disconnected'
-      ? 'disconnected'
-      : driveRecord.status;
-  const driveConnectionId =
-    driveStatus !== 'disconnected' ? driveRecord?.id || null : null;
-  const effectiveDriveWorkspaceId =
-    driveRecord?.workspace_id || resolvedWorkspaceId || workspaceId || null;
+      if (service === 'google_drive') {
+        const currentDrive = valueRef.current?.drive;
+        if (!currentDrive || !Array.isArray(currentDrive.selectedResourceIds)) {
+          return;
+        }
+        const pruned = currentDrive.selectedResourceIds.filter((id) =>
+          activeSet.has(id)
+        );
+        if (pruned.length !== currentDrive.selectedResourceIds.length) {
+          onChangeRef.current({
+            ...(valueRef.current || {}),
+            drive: {
+              ...currentDrive,
+              selectedResourceIds: pruned,
+            },
+          });
+        }
+        return;
+      }
 
-  const googleResources = useGoogleSelectedResources({
-    workspaceId: effectiveDriveWorkspaceId,
-    connectionId: driveConnectionId,
-    status: driveStatus,
-    driveAccountEmail: driveRecord?.account_email || null,
+      if (service === 'google_docs') {
+        const currentDocs = valueRef.current?.docs;
+        if (!currentDocs || !Array.isArray(currentDocs.selectedResourceIds)) {
+          return;
+        }
+        const pruned = currentDocs.selectedResourceIds.filter((id) =>
+          activeSet.has(id)
+        );
+        if (pruned.length !== currentDocs.selectedResourceIds.length) {
+          onChangeRef.current({
+            ...(valueRef.current || {}),
+            docs: {
+              ...currentDocs,
+              selectedResourceIds: pruned,
+            },
+          });
+        }
+        return;
+      }
+
+      const currentSheets = valueRef.current?.sheets;
+      if (!currentSheets || !Array.isArray(currentSheets.selectedResourceIds)) {
+        return;
+      }
+      const pruned = currentSheets.selectedResourceIds.filter((id) =>
+        activeSet.has(id)
+      );
+      if (pruned.length !== currentSheets.selectedResourceIds.length) {
+        onChangeRef.current({
+          ...(valueRef.current || {}),
+          sheets: {
+            ...currentSheets,
+            selectedResourceIds: pruned,
+          },
+        });
+      }
+    },
+    []
+  );
+
+  const handleDriveResourcesUpdated = useCallback(
+    createResourcesUpdatedHandler('google_drive'),
+    [createResourcesUpdatedHandler]
+  );
+  const handleDocsResourcesUpdated = useCallback(
+    createResourcesUpdatedHandler('google_docs'),
+    [createResourcesUpdatedHandler]
+  );
+  const handleSheetsResourcesUpdated = useCallback(
+    createResourcesUpdatedHandler('google_sheets_service'),
+    [createResourcesUpdatedHandler]
+  );
+
+  const driveResources = useGoogleSelectedResources({
+    service: 'google_drive',
+    workspaceId: driveState.workspaceId,
+    connectionId: driveState.connectionId,
+    status: driveState.status,
+    accountEmail: driveState.accountEmail,
+    connectionScopes: driveState.scopes,
     agentId,
-    onResourcesUpdated: handleResourcesUpdated,
+    onResourcesUpdated: handleDriveResourcesUpdated,
   });
 
+  const docsResources = useGoogleSelectedResources({
+    service: 'google_docs',
+    workspaceId: docsState.workspaceId,
+    connectionId: docsState.connectionId,
+    status: docsState.status,
+    accountEmail: docsState.accountEmail,
+    connectionScopes: docsState.scopes,
+    agentId,
+    onResourcesUpdated: handleDocsResourcesUpdated,
+  });
+
+  const sheetsResources = useGoogleSelectedResources({
+    service: 'google_sheets_service',
+    workspaceId: sheetsState.workspaceId,
+    connectionId: sheetsState.connectionId,
+    status: sheetsState.status,
+    accountEmail: sheetsState.accountEmail,
+    connectionScopes: sheetsState.scopes,
+    agentId,
+    onResourcesUpdated: handleSheetsResourcesUpdated,
+  });
+
+  const resourceHooksByService: Record<
+    GoogleResourceServiceKey,
+    UseGoogleSelectedResourcesReturn
+  > = {
+    google_drive: driveResources,
+    google_docs: docsResources,
+    google_sheets_service: sheetsResources,
+  };
+
   const handleConfirmRemoveResource = useCallback(async () => {
-    if (!resourceToRemove || googleResources.removingResourceId) return;
-    const removed = await googleResources.removeResource(resourceToRemove);
+    if (!resourceToRemove) return;
+    const hook = resourceHooksByService[resourceToRemove.service];
+    if (!hook || hook.removingResourceId) return;
+    const removed = await hook.removeResource(resourceToRemove.resource);
     if (removed) {
       setResourceToRemove(null);
     }
-  }, [resourceToRemove, googleResources]);
+  }, [resourceToRemove, driveResources, docsResources, sheetsResources]);
 
   // Close confirmation modal on Escape key when not actively disconnecting
   useEffect(() => {
@@ -357,21 +458,65 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
 
   const connectedCount = apps.filter((app) => app.isConnected).length;
 
-  const authorizedDocs = googleResources.resources.filter(
-    (r) => r.mime_type?.toLowerCase() === 'application/vnd.google-apps.document'
-  );
-  const authorizedSheets = googleResources.resources.filter(
-    (r) => r.mime_type?.toLowerCase() === 'application/vnd.google-apps.spreadsheet'
-  );
-  const authorizedDocsCount = authorizedDocs.length;
-  const authorizedSheetsCount = authorizedSheets.length;
-
   const handleToggleAgentResource = useCallback(
-    (resourceId: string) => {
+    (service: GoogleResourceServiceKey, resourceId: string) => {
       if (!onChangeRef.current) return;
-      const activeIds = googleResources.resources.map((r) => r.id);
-      const currentSelected = Array.isArray(valueRef.current?.drive?.selectedResourceIds)
-        ? valueRef.current!.drive!.selectedResourceIds!
+
+      if (service === 'google_drive') {
+        const activeIds = driveResources.resources.map((r) => r.id);
+        const currentSelected = Array.isArray(
+          valueRef.current?.drive?.selectedResourceIds
+        )
+          ? valueRef.current!.drive!.selectedResourceIds!
+          : activeIds;
+
+        const nextSelected = currentSelected.includes(resourceId)
+          ? currentSelected.filter((id) => id !== resourceId)
+          : [...currentSelected, resourceId];
+
+        onChangeRef.current({
+          ...(valueRef.current || {}),
+          drive: {
+            ...(valueRef.current?.drive || {
+              enabled: driveState.status === 'connected',
+              status: driveState.status,
+            }),
+            selectedResourceIds: nextSelected,
+          },
+        });
+        return;
+      }
+
+      if (service === 'google_docs') {
+        const activeIds = docsResources.resources.map((r) => r.id);
+        const currentSelected = Array.isArray(
+          valueRef.current?.docs?.selectedResourceIds
+        )
+          ? valueRef.current!.docs!.selectedResourceIds!
+          : activeIds;
+
+        const nextSelected = currentSelected.includes(resourceId)
+          ? currentSelected.filter((id) => id !== resourceId)
+          : [...currentSelected, resourceId];
+
+        onChangeRef.current({
+          ...(valueRef.current || {}),
+          docs: {
+            ...(valueRef.current?.docs || {
+              enabled: docsState.status === 'connected',
+              status: docsState.status,
+            }),
+            selectedResourceIds: nextSelected,
+          },
+        });
+        return;
+      }
+
+      const activeIds = sheetsResources.resources.map((r) => r.id);
+      const currentSelected = Array.isArray(
+        valueRef.current?.sheets?.selectedResourceIds
+      )
+        ? valueRef.current!.sheets!.selectedResourceIds!
         : activeIds;
 
       const nextSelected = currentSelected.includes(resourceId)
@@ -380,16 +525,25 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
 
       onChangeRef.current({
         ...(valueRef.current || {}),
-        drive: {
-          ...(valueRef.current?.drive || {
-            enabled: driveStatus === 'connected',
-            status: driveStatus,
+        sheets: {
+          ...(valueRef.current?.sheets || {
+            enabled: sheetsState.status === 'connected',
+            status: sheetsState.status,
+            columns: [],
+            sheetName: 'Sheet1',
           }),
           selectedResourceIds: nextSelected,
         },
       });
     },
-    [googleResources.resources, driveStatus]
+    [
+      driveResources.resources,
+      docsResources.resources,
+      sheetsResources.resources,
+      driveState.status,
+      docsState.status,
+      sheetsState.status,
+    ]
   );
 
   const handleConnect = async (
@@ -604,13 +758,54 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                 const isThisDisconnecting = disconnectingService === app.service;
                 const isBusy =
                   connectingService !== null || disconnectingService !== null;
-                const isDriveCard = app.key === 'drive';
-                const driveResourceBadge =
-                  isDriveCard && app.status === 'connected'
-                    ? googleResources.activeCount > 0
-                      ? 'Resources selected'
-                      : 'Selection required'
+                const resourceServiceKey: GoogleResourceServiceKey | null =
+                  app.service === 'google_drive' ||
+                  app.service === 'google_docs' ||
+                  app.service === 'google_sheets_service'
+                    ? app.service
                     : null;
+                const serviceHook = resourceServiceKey
+                  ? resourceHooksByService[resourceServiceKey]
+                  : null;
+
+                let resourceStatusBadge: {
+                  label: string;
+                  tone: 'emerald' | 'amber';
+                } | null = null;
+                if (serviceHook && app.status === 'connected') {
+                  if (serviceHook.needsScopeReauth) {
+                    resourceStatusBadge = {
+                      label: 'Reauthorization required',
+                      tone: 'amber',
+                    };
+                  } else if (serviceHook.activeCount > 0) {
+                    if (resourceServiceKey === 'google_drive') {
+                      resourceStatusBadge = {
+                        label: 'Resources selected',
+                        tone: 'emerald',
+                      };
+                    } else if (resourceServiceKey === 'google_docs') {
+                      resourceStatusBadge = {
+                        label: `${serviceHook.activeCount} ${
+                          serviceHook.activeCount === 1 ? 'Doc' : 'Docs'
+                        } selected`,
+                        tone: 'emerald',
+                      };
+                    } else {
+                      resourceStatusBadge = {
+                        label: `${serviceHook.activeCount} ${
+                          serviceHook.activeCount === 1 ? 'Sheet' : 'Sheets'
+                        } selected`,
+                        tone: 'emerald',
+                      };
+                    }
+                  } else {
+                    resourceStatusBadge = {
+                      label: 'Selection required',
+                      tone: 'amber',
+                    };
+                  }
+                }
 
                 return (
                   <div
@@ -634,60 +829,24 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                                 <span>Active</span>
                               </span>
                             )}
-                            {driveResourceBadge && (
+                            {resourceStatusBadge && (
                               <span
                                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                                  driveResourceBadge === 'Resources selected'
+                                  resourceStatusBadge.tone === 'emerald'
                                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                                     : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
                                 }`}
                               >
-                                {driveResourceBadge}
-                              </span>
-                            )}
-                            {app.key === 'docs' && app.status === 'connected' && (
-                              <span
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                                  driveStatus !== 'connected'
-                                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                                    : authorizedDocsCount > 0
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                                }`}
-                              >
-                                {driveStatus !== 'connected'
-                                  ? 'Select via Google Drive'
-                                  : authorizedDocsCount > 0
-                                  ? `${authorizedDocsCount} ${
-                                      authorizedDocsCount === 1 ? 'Doc' : 'Docs'
-                                    } selected`
-                                  : 'Selection required'}
-                              </span>
-                            )}
-                            {app.key === 'sheets' && app.status === 'connected' && (
-                              <span
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                                  driveStatus !== 'connected'
-                                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                                    : authorizedSheetsCount > 0
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                                }`}
-                              >
-                                {driveStatus !== 'connected'
-                                  ? 'Select via Google Drive'
-                                  : authorizedSheetsCount > 0
-                                  ? `${authorizedSheetsCount} ${
-                                      authorizedSheetsCount === 1 ? 'Sheet' : 'Sheets'
-                                    } selected`
-                                  : 'Selection required'}
+                                {resourceStatusBadge.label}
                               </span>
                             )}
                             {app.status === 'expired' && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                                 <AlertCircle className="size-2.5" />
                                 <span>
-                                  {isDriveCard ? 'Authorization expired' : 'Expired'}
+                                  {resourceServiceKey
+                                    ? 'Authorization expired'
+                                    : 'Expired'}
                                 </span>
                               </span>
                             )}
@@ -749,7 +908,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                               <AlertCircle className="size-3.5" />
                               <span>
                                 {app.status === 'expired'
-                                  ? isDriveCard
+                                  ? resourceServiceKey
                                     ? 'Authorization expired'
                                     : 'Expired'
                                   : 'Error'}
@@ -797,171 +956,59 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                       </div>
                     </div>
 
-                    {/* Google Drive Authorized Resources Section */}
-                    {isDriveCard && (
+                    {/* Independent Authorized Resources Section for Drive, Docs, and Sheets */}
+                    {resourceServiceKey && serviceHook && (
                       <AuthorizedResourcesSection
-                        driveStatus={app.status}
-                        resources={googleResources.resources}
-                        selectedCount={googleResources.selectedCount}
-                        activeCount={googleResources.activeCount}
-                        isLoadingResources={googleResources.isLoadingResources}
-                        isFetchingPickerToken={googleResources.isFetchingPickerToken}
-                        isPickerOpen={googleResources.isPickerOpen}
-                        isSavingSelection={googleResources.isSavingSelection}
-                        removingResourceId={googleResources.removingResourceId}
-                        resourcesError={googleResources.resourcesError}
+                        service={resourceServiceKey}
+                        status={app.status}
+                        resources={serviceHook.resources}
+                        selectedCount={serviceHook.selectedCount}
+                        activeCount={serviceHook.activeCount}
+                        needsScopeReauth={serviceHook.needsScopeReauth}
+                        scopeReauthMessage={serviceHook.scopeReauthMessage}
+                        isLoadingResources={serviceHook.isLoadingResources}
+                        isFetchingPickerToken={serviceHook.isFetchingPickerToken}
+                        isPickerOpen={serviceHook.isPickerOpen}
+                        isSavingSelection={serviceHook.isSavingSelection}
+                        removingResourceId={serviceHook.removingResourceId}
+                        resourcesError={serviceHook.resourcesError}
                         isBusyConnectingOrDisconnecting={isBusy}
                         selectedAgentResourceIds={
-                          onChange ? value?.drive?.selectedResourceIds : undefined
+                          onChange
+                            ? resourceServiceKey === 'google_drive'
+                              ? value?.drive?.selectedResourceIds
+                              : resourceServiceKey === 'google_docs'
+                              ? value?.docs?.selectedResourceIds
+                              : value?.sheets?.selectedResourceIds
+                            : undefined
                         }
                         onToggleAgentResource={
-                          onChange ? handleToggleAgentResource : undefined
+                          onChange
+                            ? (resId) =>
+                                handleToggleAgentResource(
+                                  resourceServiceKey,
+                                  resId
+                                )
+                            : undefined
                         }
                         onSelectResources={() =>
-                          void googleResources.selectResources('all')
+                          void serviceHook.selectResources()
                         }
-                        onRequestRemoveResource={(res) => setResourceToRemove(res)}
+                        onRequestRemoveResource={(res) =>
+                          setResourceToRemove({
+                            service: resourceServiceKey,
+                            resource: res,
+                          })
+                        }
                         onRefreshResources={() =>
-                          void googleResources.refreshResources()
+                          void serviceHook.refreshResources()
                         }
-                        onConnectDrive={() =>
-                          void handleConnect('drive', 'Google Drive')
+                        onConnectService={() =>
+                          void handleConnect(app.key, app.name)
                         }
-                        onClearError={googleResources.clearResourcesError}
+                        onClearError={serviceHook.clearResourcesError}
                       />
                     )}
-
-                    {/* Google Docs & Google Sheets Resource Selection Interface (via central Google Drive connection) */}
-                    {(app.key === 'docs' || app.key === 'sheets') &&
-                      app.status === 'connected' && (
-                        <div className="mt-3 pt-3 border-t border-border/80 space-y-2.5">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <div className="space-y-0.5">
-                              <span className="text-xs font-semibold text-foreground">
-                                {app.key === 'docs'
-                                  ? 'Authorized Google Docs'
-                                  : 'Authorized Google Sheets'}
-                              </span>
-                              <p className="text-[11px] text-muted-foreground">
-                                {app.key === 'docs'
-                                  ? 'Google Docs files are selected and authorized centrally through Google Drive.'
-                                  : 'Google Sheets spreadsheets are selected and authorized centrally through Google Drive.'}
-                              </p>
-                            </div>
-
-                            {driveStatus === 'connected' ? (
-                              <button
-                                type="button"
-                                disabled={
-                                  isBusy ||
-                                  googleResources.isFetchingPickerToken ||
-                                  googleResources.isPickerOpen ||
-                                  googleResources.isSavingSelection ||
-                                  Boolean(googleResources.removingResourceId)
-                                }
-                                onClick={() =>
-                                  void googleResources.selectResources(
-                                    app.key === 'docs'
-                                      ? 'documents'
-                                      : 'spreadsheets'
-                                  )
-                                }
-                                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {googleResources.isFetchingPickerToken ||
-                                googleResources.isPickerOpen ||
-                                googleResources.isSavingSelection ? (
-                                  <Loader2 className="size-3.5 animate-spin" />
-                                ) : (
-                                  <Plus className="size-3.5" />
-                                )}
-                                <span>
-                                  {app.key === 'docs'
-                                    ? authorizedDocsCount > 0
-                                      ? 'Manage Docs via Drive'
-                                      : 'Select Docs via Drive'
-                                    : authorizedSheetsCount > 0
-                                    ? 'Manage Sheets via Drive'
-                                    : 'Select Sheets via Drive'}
-                                </span>
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() =>
-                                  void handleConnect('drive', 'Google Drive')
-                                }
-                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 transition-colors shrink-0 cursor-pointer disabled:opacity-50"
-                              >
-                                <RefreshCw className="size-3.5" />
-                                <span>
-                                  {driveStatus === 'expired' || driveStatus === 'error'
-                                    ? 'Reconnect Google Drive'
-                                    : 'Connect Google Drive'}
-                                </span>
-                              </button>
-                            )}
-                          </div>
-
-                          {driveStatus === 'connected' &&
-                            (app.key === 'docs' ? authorizedDocs : authorizedSheets)
-                              .length > 0 && (
-                              <div className="divide-y divide-border rounded-xl border border-border bg-background/60 overflow-hidden">
-                                {(app.key === 'docs'
-                                  ? authorizedDocs
-                                  : authorizedSheets
-                                ).map((resource) => (
-                                  <div
-                                    key={resource.id}
-                                    className="px-3 py-2 flex items-center justify-between gap-2.5 hover:bg-muted/30 transition-colors"
-                                  >
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      {renderResourceMimeIcon(resource.mime_type)}
-                                      <div className="min-w-0">
-                                        <p className="text-xs font-medium text-foreground truncate max-w-[240px] sm:max-w-[340px]">
-                                          {resource.name}
-                                        </p>
-                                        <p className="text-[10px] text-muted-foreground">
-                                          Selected{' '}
-                                          {formatSelectionDate(
-                                            resource.selected_at ||
-                                              resource.created_at
-                                          )}
-                                        </p>
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      {resource.web_view_link && (
-                                        <a
-                                          href={resource.web_view_link}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground hover:bg-accent transition-colors"
-                                        >
-                                          <span>Open</span>
-                                          <ExternalLink className="size-3" />
-                                        </a>
-                                      )}
-                                      <button
-                                        type="button"
-                                        disabled={Boolean(
-                                          googleResources.removingResourceId
-                                        )}
-                                        onClick={() => setResourceToRemove(resource)}
-                                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer disabled:opacity-50"
-                                      >
-                                        <Trash2 className="size-3" />
-                                        <span>Remove</span>
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                        </div>
-                      )}
                   </div>
                 );
               })}
@@ -971,13 +1018,18 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
       </div>
 
       <RemoveGoogleResourceModal
-        resource={resourceToRemove}
+        resource={resourceToRemove?.resource || null}
+        service={resourceToRemove?.service}
         isRemoving={Boolean(
           resourceToRemove &&
-            googleResources.removingResourceId === resourceToRemove.id
+            resourceHooksByService[resourceToRemove.service]
+              ?.removingResourceId === resourceToRemove.resource.id
         )}
         onCancel={() => {
-          if (!googleResources.removingResourceId) {
+          const activeHook = resourceToRemove
+            ? resourceHooksByService[resourceToRemove.service]
+            : null;
+          if (!activeHook?.removingResourceId) {
             setResourceToRemove(null);
           }
         }}
