@@ -13,7 +13,6 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
-  ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
@@ -30,7 +29,7 @@ interface ServiceUiCopy {
   serviceLabel: string;
   sectionTitle: string;
   selectButtonLabel: string;
-  subtitle: string;
+  subtitle?: string;
   disconnectedPrompt: string;
   connectButtonLabel: string;
   reconnectButtonLabel: string;
@@ -46,7 +45,7 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
   google_drive: {
     serviceLabel: 'Google Drive',
     sectionTitle: 'Authorized Drive Files',
-    selectButtonLabel: 'Select Drive Files',
+    selectButtonLabel: 'Add Drive File',
     subtitle:
       'Select uploaded Drive files (PDFs, images, CSV, Word, Excel, archives) or folders for this Google Drive connection. Native Google Docs and Sheets are managed separately.',
     disconnectedPrompt:
@@ -65,9 +64,7 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
   google_docs: {
     serviceLabel: 'Google Docs',
     sectionTitle: 'Authorized Google Docs',
-    selectButtonLabel: 'Select Google Docs',
-    subtitle:
-      'Select native Google Docs documents authorized specifically through this Google Docs connection.',
+    selectButtonLabel: 'Add Docs',
     disconnectedPrompt:
       'Connect your Google Docs account to browse and select native Google Docs documents.',
     connectButtonLabel: 'Connect Google Docs',
@@ -84,9 +81,7 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
   google_sheets_service: {
     serviceLabel: 'Google Sheets',
     sectionTitle: 'Authorized Google Sheets',
-    selectButtonLabel: 'Select Google Sheets',
-    subtitle:
-      'Select native Google Sheets spreadsheets authorized specifically through this Google Sheets connection.',
+    selectButtonLabel: 'Add Sheet',
     disconnectedPrompt:
       'Connect your Google Sheets account to browse and select native Google Sheets spreadsheets.',
     connectButtonLabel: 'Connect Google Sheets',
@@ -361,7 +356,9 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               </span>
             )}
           </div>
-          <p className="text-[11px] text-muted-foreground">{copy.subtitle}</p>
+          {copy.subtitle && (
+            <p className="text-[11px] text-muted-foreground">{copy.subtitle}</p>
+          )}
         </div>
 
         {status === 'connected' && (
@@ -540,17 +537,6 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
           ) : resources.length > 0 ? (
             /* State C: Resources Selected */
             <div className="space-y-2">
-              {onToggleAgentResource && (
-                <div className="flex items-center justify-between gap-2 px-1">
-                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <ShieldCheck className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span>
-                      Select which authorized {copy.serviceLabel} resources this agent can use (enforced by your workspace backend at runtime).
-                    </span>
-                  </div>
-                </div>
-              )}
-
               <div className="divide-y divide-border rounded-xl border border-border bg-background/60 overflow-hidden">
                 {resources.map((resource) => {
                   const isRemovingThis = removingResourceId === resource.id;

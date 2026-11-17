@@ -724,15 +724,6 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
         {/* Expanded Apps List */}
         {isExpanded && (
           <div className="border-t border-border p-4 sm:p-6 bg-muted/20 space-y-3 animate-in fade-in duration-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-1">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Select &amp; Connect Google Workspace Tools
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                Each service connects independently with its own account and authorized resources.
-              </div>
-            </div>
-
             {isLoadingStatus && (
               <div className="rounded-xl border border-border bg-card/80 px-3.5 py-2.5 flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="size-3.5 animate-spin text-primary shrink-0" />
