@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Plus,
   Send,
   Bot,
   User as UserIcon,
@@ -20,7 +19,6 @@ import { TakeoverSlider } from '../components/TakeoverSlider';
 
 interface InboxPageProps {
   conversations: Conversation[];
-  onNewConversation: () => void;
   onUpdateConversation: (updated: Conversation) => void;
 }
 
@@ -64,7 +62,6 @@ export function renderConversationStatusBadge(status: ConversationStatus) {
 
 export const InboxPage: React.FC<InboxPageProps> = ({
   conversations,
-  onNewConversation,
   onUpdateConversation,
 }) => {
   // Frontend status/unread/reason overrides so status transitions work seamlessly
@@ -399,14 +396,6 @@ export const InboxPage: React.FC<InboxPageProps> = ({
             Every conversation your agent handled, across all channels.
           </p>
         </div>
-
-        <button
-          onClick={onNewConversation}
-          className="flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-foreground hover:bg-accent transition-colors cursor-pointer"
-        >
-          <Plus className="size-4" />
-          <span>New test conversation</span>
-        </button>
       </div>
 
       {/* Inbox Status Filters Bar */}

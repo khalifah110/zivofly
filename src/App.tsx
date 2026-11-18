@@ -261,25 +261,6 @@ function AppContent() {
     );
   };
 
-  const handleNewConversation = async () => {
-    try {
-      const res = await apiFetch('/api/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: `Customer #${Math.floor(1000 + Math.random() * 9000)}`,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setConversations((prev) => [data.conversation || data.data, ...prev]);
-        toast.success('New test conversation created');
-      }
-    } catch {
-      toast.error('Failed to create test conversation');
-    }
-  };
-
   const handleUpdateConversation = (updated: Conversation) => {
     setConversations((prev) =>
       prev.map((c) => (c.id === updated.id ? updated : c))
@@ -396,7 +377,6 @@ function AppContent() {
       return (
         <InboxPage
           conversations={conversations}
-          onNewConversation={handleNewConversation}
           onUpdateConversation={handleUpdateConversation}
         />
       );
