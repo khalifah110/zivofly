@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Toaster, toast } from 'sonner';
 import { Header } from './components/Header';
-import { MobileNav } from './components/MobileNav';
 import { LandingPage } from './pages/LandingPage';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -438,20 +437,11 @@ function AppContent() {
         className={
           isFullBleedPublicPage
             ? ''
-            : 'mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8 pb-24 sm:pb-8'
+            : 'mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8'
         }
       >
         {renderCurrentView()}
       </main>
-
-      {/* Mobile Bottom Navigation Bar */}
-      {user && !isFullBleedPublicPage && (
-        <MobileNav
-          currentPath={currentPath}
-          onNavigate={navigate}
-          conversationsCount={conversations.length}
-        />
-      )}
     </div>
   );
 }
