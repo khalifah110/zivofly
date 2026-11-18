@@ -359,10 +359,21 @@ export function useGoogleSelectedResources({
           saveResult.rejectedCount > 0 &&
           saveResult.rejectedReasons.length > 0
         ) {
+          const isShortDriveNotice =
+            service === 'google_drive' &&
+            saveResult.rejectedReasons.every(
+              (r) =>
+                r === 'Docs file should be selected through Docs.' ||
+                r === 'Sheet should be selected through sheet.' ||
+                r ===
+                  'Docs file should be selected through Docs. Sheet should be selected through sheet.'
+            );
           toast.warning(
-            `${serviceLabel} rejected ${
-              saveResult.rejectedCount
-            } file(s): ${saveResult.rejectedReasons.join('; ')}`,
+            isShortDriveNotice
+              ? saveResult.rejectedReasons.join(' ')
+              : `${serviceLabel} rejected ${
+                  saveResult.rejectedCount
+                } file(s): ${saveResult.rejectedReasons.join('; ')}`,
             { duration: 7000 }
           );
         }

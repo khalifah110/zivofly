@@ -132,8 +132,8 @@ export function filterAndValidatePickerFiles(
           id,
           reason:
             mime === GOOGLE_DOC_MIME_TYPE
-              ? 'Native Google Docs must be selected from Google Docs.'
-              : 'Native Google Sheets must be selected from Google Sheets.',
+              ? 'Docs file should be selected through Docs.'
+              : 'Sheet should be selected through sheet.',
         });
         continue;
       }
@@ -173,7 +173,26 @@ export function filterAndValidatePickerFiles(
   if (rejectedFiles.length > 0) {
     const names = formatRejectedFileNames(rejectedFiles);
     if (service === 'google_drive') {
-      rejectionMessage = `Native Google Docs and Google Sheets cannot be selected in Google Drive (${names}). Please select them from the Google Docs or Google Sheets cards instead.`;
+      const hasDoc = rejectedFiles.some(
+        (f) =>
+          typeof f.mimeType === 'string' &&
+          f.mimeType.trim().toLowerCase() === GOOGLE_DOC_MIME_TYPE
+      );
+      const hasSheet = rejectedFiles.some(
+        (f) =>
+          typeof f.mimeType === 'string' &&
+          f.mimeType.trim().toLowerCase() === GOOGLE_SHEET_MIME_TYPE
+      );
+      if (hasDoc && hasSheet) {
+        rejectionMessage =
+          'Docs file should be selected through Docs. Sheet should be selected through sheet.';
+      } else if (hasDoc) {
+        rejectionMessage = 'Docs file should be selected through Docs.';
+      } else if (hasSheet) {
+        rejectionMessage = 'Sheet should be selected through sheet.';
+      } else {
+        rejectionMessage = rejectedFiles[0].reason;
+      }
     } else if (service === 'google_docs') {
       rejectionMessage = `Only native Google Docs documents can be selected in Google Docs (${names} rejected).`;
     } else {

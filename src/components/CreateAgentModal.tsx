@@ -19,6 +19,7 @@ import { HubSpotSection } from './HubSpotSection';
 import { GOOGLE_SHEET_TEMPLATES } from '../data/sheetTemplates';
 import { CustomAgentVoiceSection } from './CustomAgentVoiceSection';
 import { TikTokLogo } from './BrandLogos';
+import { toast } from 'sonner';
 
 interface CreateAgentModalProps {
   isOpen: boolean;
@@ -79,7 +80,21 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const trimmedName = name.trim();
+    const trimmedRoleAndDuties = roleAndDuties.trim();
+
+    if (!trimmedName && !trimmedRoleAndDuties) {
+      toast.error('Agent name and Role and duties are required.');
+      return;
+    }
+    if (!trimmedName) {
+      toast.error('Agent name is required.');
+      return;
+    }
+    if (!trimmedRoleAndDuties) {
+      toast.error('Role and duties are required.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -87,11 +102,9 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name,
+          name: trimmedName,
           description: description || 'Multi-platform automated AI agent with database integration',
-          roleAndDuties:
-            roleAndDuties ||
-            'You are an executive customer concierge. Warmly and professionally answer questions, check pricing and stock, provide booking assistance, and clarify business policies.',
+          roleAndDuties: trimmedRoleAndDuties,
           customVoice,
           platforms,
           whatItRepliesTo: {
@@ -110,17 +123,20 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
           },
         }),
       });
-      const data = await res.json();
-      if (data.agent) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.agent) {
         onAgentCreated(data.agent);
         onClose();
         setName('');
         setDescription('');
         setRoleAndDuties('');
         setCustomVoice(undefined);
+      } else {
+        toast.error(data?.error || 'Failed to create agent');
       }
     } catch (err) {
       console.error('Agent creation error', err);
+      toast.error('Could not create agent');
     } finally {
       setIsSubmitting(false);
     }
@@ -164,7 +180,6 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. Customer Support Concierge"
                   className="w-full px-3 py-2 text-xs border border-border bg-card rounded-xl focus:border-primary focus:outline-none"
-                  required
                 />
               </div>
 
@@ -273,7 +288,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
           <button
             type="submit"
             form="createAgentForm"
-            disabled={isSubmitting || !name.trim()}
+            disabled={isSubmitting}
             className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
           >
             {isSubmitting ? 'Creating agent…' : 'Create Agent'}

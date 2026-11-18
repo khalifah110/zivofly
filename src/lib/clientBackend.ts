@@ -381,11 +381,28 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   }
 
   if (pathname === '/api/agents' && method === 'POST') {
+    const trimmedName = typeof body?.name === 'string' ? body.name.trim() : '';
+    const trimmedRoleAndDuties =
+      typeof body?.roleAndDuties === 'string' ? body.roleAndDuties.trim() : '';
+
+    if (!trimmedName && !trimmedRoleAndDuties) {
+      return jsonResponse({ error: 'Agent name and Role and duties are required.' }, 400);
+    }
+    if (!trimmedName) {
+      return jsonResponse({ error: 'Agent name is required.' }, 400);
+    }
+    if (!trimmedRoleAndDuties) {
+      return jsonResponse({ error: 'Role and duties are required.' }, 400);
+    }
+
     const userId = await resolveCurrentUserId();
 
     if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
       try {
-        const supaAgent = await createSupabaseAgent(body, userId);
+        const supaAgent = await createSupabaseAgent(
+          { ...body, name: trimmedName, roleAndDuties: trimmedRoleAndDuties },
+          userId
+        );
         if (supaAgent) {
           const agents = getStored<Agent[]>(STORAGE_KEYS.AGENTS, []);
           agents.unshift(supaAgent);
@@ -401,10 +418,10 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     const newAgent: Agent = {
       id: `agent_${Date.now()}`,
       userId: userId || 'user_supabase',
-      name: body?.name || 'Customer Concierge',
-      description: body?.description || 'Automated customer care assistant',
+      name: trimmedName,
+      description: body?.description || trimmedRoleAndDuties,
       platforms: body?.platforms || ['instagram', 'whatsapp'],
-      roleAndDuties: body?.roleAndDuties || 'Warmly assist customers with questions, pricing, and bookings.',
+      roleAndDuties: trimmedRoleAndDuties,
       openingLine: body?.openingLine,
       tone: body?.tone,
       customVoice: body?.customVoice,
@@ -516,6 +533,24 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       const baseAgent = idx !== -1 ? agents[idx] : { ...DEFAULT_AGENT, id: agentId };
       const statusChanged =
         typeof body?.status === 'string' && body.status !== baseAgent.status;
+      if (!statusChanged) {
+        const hasBlankName =
+          body && 'name' in body && (typeof body.name !== 'string' || !body.name.trim());
+        const hasBlankRole =
+          body &&
+          'roleAndDuties' in body &&
+          (typeof body.roleAndDuties !== 'string' || !body.roleAndDuties.trim());
+
+        if (hasBlankName && hasBlankRole) {
+          return jsonResponse({ error: 'Agent name and Role and duties are required.' }, 400);
+        }
+        if (hasBlankName) {
+          return jsonResponse({ error: 'Agent name is required.' }, 400);
+        }
+        if (hasBlankRole) {
+          return jsonResponse({ error: 'Role and duties are required.' }, 400);
+        }
+      }
       let updated = { ...baseAgent, ...body, updatedAt: new Date().toISOString() };
 
       if (

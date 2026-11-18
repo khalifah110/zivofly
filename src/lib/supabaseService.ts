@@ -4908,7 +4908,7 @@ export async function saveGoogleSelectedResources(params: {
       ? data.errors
       : [];
 
-    const rejectedReasons: string[] = rawRejected
+    const rawRejectedReasons: string[] = rawRejected
       .map((item: any) => {
         if (typeof item === 'string') return item.trim();
         if (item && typeof item === 'object') {
@@ -4927,6 +4927,30 @@ export async function saveGoogleSelectedResources(params: {
       })
       .filter(Boolean);
 
+    const rejectedReasons: string[] =
+      service === 'google_drive'
+        ? Array.from(
+            new Set(
+              rawRejectedReasons.map((reason) => {
+                const lower = reason.toLowerCase();
+                const isDoc =
+                  lower.includes('google doc') ||
+                  lower.includes('vnd.google-apps.document');
+                const isSheet =
+                  lower.includes('google sheet') ||
+                  lower.includes('vnd.google-apps.spreadsheet') ||
+                  lower.includes('spreadsheet');
+                if (isDoc && isSheet) {
+                  return 'Docs file should be selected through Docs. Sheet should be selected through sheet.';
+                }
+                if (isDoc) return 'Docs file should be selected through Docs.';
+                if (isSheet) return 'Sheet should be selected through sheet.';
+                return reason;
+              })
+            )
+          )
+        : rawRejectedReasons;
+
     const savedCount =
       typeof data.saved_count === 'number'
         ? data.saved_count
@@ -4942,6 +4966,18 @@ export async function saveGoogleSelectedResources(params: {
         : rawRejected.length;
 
     if (savedCount === 0 && rejectedReasons.length > 0) {
+      if (
+        service === 'google_drive' &&
+        rejectedReasons.every(
+          (r) =>
+            r === 'Docs file should be selected through Docs.' ||
+            r === 'Sheet should be selected through sheet.' ||
+            r ===
+              'Docs file should be selected through Docs. Sheet should be selected through sheet.'
+        )
+      ) {
+        throw new Error(rejectedReasons.join(' '));
+      }
       throw new Error(
         typeof data.message === 'string' && data.message.trim()
           ? data.message.trim()

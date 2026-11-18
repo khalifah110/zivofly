@@ -514,8 +514,19 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
   }
 
   const handleSave = async () => {
-    if (!name.trim()) {
-      toast.error('Please enter an agent name');
+    const trimmedName = name.trim();
+    const trimmedRoleAndDuties = roleAndDuties.trim();
+
+    if (!trimmedName && !trimmedRoleAndDuties) {
+      toast.error('Agent name and Role and duties are required.');
+      return;
+    }
+    if (!trimmedName) {
+      toast.error('Agent name is required.');
+      return;
+    }
+    if (!trimmedRoleAndDuties) {
+      toast.error('Role and duties are required.');
       return;
     }
 
@@ -527,13 +538,13 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: name.trim(),
-            roleAndDuties: roleAndDuties.trim(),
+            name: trimmedName,
+            roleAndDuties: trimmedRoleAndDuties,
             openingLine: openingLine.trim(),
             tone: tone.trim(),
             customVoice,
             humanHandoff,
-            description: roleAndDuties.trim() || 'AI Customer Support Agent',
+            description: trimmedRoleAndDuties,
             status: isActive ? 'active' : 'paused',
             platforms,
             whatItRepliesTo,
@@ -588,22 +599,22 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
           }),
         });
 
+        const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          const data = await res.json();
           if (onAgentCreated) {
             onAgentCreated(data.agent);
           }
           toast.success(`Agent "${data.agent.name}" created successfully!`);
           onNavigate(`/agents/${data.agent.id}`);
         } else {
-          toast.error('Failed to create agent');
+          toast.error(data?.error || 'Failed to create agent');
         }
       } else if (agent) {
         // Update existing agent via PUT
         const updatedAgent: Agent = {
           ...agent,
-          name: name.trim() || agent.name,
-          roleAndDuties: roleAndDuties.trim() || agent.roleAndDuties,
+          name: trimmedName,
+          roleAndDuties: trimmedRoleAndDuties,
           openingLine: openingLine.trim(),
           tone: tone.trim(),
           customVoice,
@@ -670,12 +681,12 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
           body: JSON.stringify(updatedAgent),
         });
 
+        const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          const data = await res.json();
           onAgentUpdated(data.agent);
           toast.success('Agent and settings saved successfully');
         } else {
-          toast.error('Failed to save agent');
+          toast.error(data?.error || 'Failed to save agent');
         }
       }
     } catch {
