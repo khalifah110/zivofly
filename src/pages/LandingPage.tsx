@@ -90,24 +90,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </p>
 
           <div className="mt-8 flex flex-col items-center">
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <button
-                onClick={() => onNavigate(ctaPath)}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-base font-medium text-primary-foreground shadow-sm hover:opacity-95 transition-all active:scale-[0.98] cursor-pointer"
-              >
-                <span>
-                  {isAuthenticated ? 'Go to dashboard' : 'Connect your account'}
-                </span>
-                <ArrowRight className="size-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('/support')}
-                className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-5 py-3.5 text-sm font-medium text-foreground hover:bg-accent transition-colors cursor-pointer"
-              >
-                <span>Contact &amp; Support</span>
-              </button>
-            </div>
+            <button
+              onClick={() => onNavigate(ctaPath)}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-base font-medium text-primary-foreground shadow-sm hover:opacity-95 transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <span>
+                {isAuthenticated ? 'Go to dashboard' : 'Connect your account'}
+              </span>
+              <ArrowRight className="size-4" />
+            </button>
             <p className="mt-3 text-xs text-muted-foreground">
               No developer needed. No app settings to configure.
             </p>

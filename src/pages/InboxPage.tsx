@@ -10,7 +10,6 @@ import {
   UserCheck,
   CheckCircle2,
   RotateCcw,
-  Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ChannelIcon } from '../components/ChannelIcon';
@@ -28,137 +27,6 @@ interface InboxPageProps {
 type InboxFilterType = 'all' | 'unread' | 'human_needed' | 'human_handling';
 
 const FRONTEND_CONVERSATION_STATUS_STORAGE_KEY = 'zivofly_inbox_conv_status_overrides_v1';
-
-const INITIAL_FALLBACK_CONVERSATIONS: Conversation[] = [
-  {
-    id: 'conv_handoff_1',
-    agentId: 'agent_default',
-    agentName: 'AI Concierge',
-    userId: 'user_default',
-    platform: 'whatsapp',
-    customerName: 'Daniel Mercer',
-    customerHandle: '+1 (415) 890-4412',
-    lastMessageText: 'Can you approve a custom 25% enterprise discount for 40 seats and send a custom contract?',
-    lastMessageTime: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
-    unread: true,
-    status: 'human_needed',
-    handoffReason: 'Customer requested custom enterprise contract pricing outside standard knowledge base.',
-    messages: [
-      {
-        id: 'msg_h1_1',
-        sender: 'customer',
-        text: 'Hi! We are looking to onboard our 40-person team this week.',
-        timestamp: new Date(Date.now() - 9 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_h1_2',
-        sender: 'agent',
-        text: 'Welcome Daniel! I would be glad to help with your team onboarding. Our standard Business plan supports unlimited seats.',
-        timestamp: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_h1_3',
-        sender: 'customer',
-        text: 'Can you approve a custom 25% enterprise discount for 40 seats and send a custom contract?',
-        timestamp: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'conv_ai_2',
-    agentId: 'agent_default',
-    agentName: 'AI Concierge',
-    userId: 'user_default',
-    platform: 'instagram',
-    customerName: 'Elena Rostova',
-    customerHandle: '@elena.studio',
-    lastMessageText: 'Perfect, thank you for confirming the express shipping timeline!',
-    lastMessageTime: new Date(Date.now() - 22 * 60 * 1000).toISOString(),
-    unread: false,
-    status: 'agent_active',
-    messages: [
-      {
-        id: 'msg_a2_1',
-        sender: 'customer',
-        text: 'How long does express delivery take to New York?',
-        timestamp: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_a2_2',
-        sender: 'agent',
-        text: 'Express delivery to New York takes 1–2 business days with full tracking provided as soon as your order ships.',
-        timestamp: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_a2_3',
-        sender: 'customer',
-        text: 'Perfect, thank you for confirming the express shipping timeline!',
-        timestamp: new Date(Date.now() - 22 * 60 * 1000).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'conv_human_3',
-    agentId: 'agent_default',
-    agentName: 'AI Concierge',
-    userId: 'user_default',
-    platform: 'messenger',
-    customerName: 'Marcus Vance',
-    customerHandle: 'Marcus Vance',
-    lastMessageText: 'I have updated your invoice billing address and sent a revised copy to your email.',
-    lastMessageTime: new Date(Date.now() - 48 * 60 * 1000).toISOString(),
-    unread: false,
-    status: 'human_takeover',
-    handoffReason: 'Billing invoice adjustment requested by customer.',
-    messages: [
-      {
-        id: 'msg_m3_1',
-        sender: 'customer',
-        text: 'Hello, I need to change the VAT number on last month’s invoice.',
-        timestamp: new Date(Date.now() - 55 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_m3_2',
-        sender: 'human',
-        text: 'I have updated your invoice billing address and sent a revised copy to your email.',
-        timestamp: new Date(Date.now() - 48 * 60 * 1000).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'conv_resolved_4',
-    agentId: 'agent_default',
-    agentName: 'AI Concierge',
-    userId: 'user_default',
-    platform: 'whatsapp',
-    customerName: 'Sophia Lin',
-    customerHandle: '+1 (310) 555-0194',
-    lastMessageText: 'Got it, see you tomorrow at 2:30 PM!',
-    lastMessageTime: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    unread: false,
-    status: 'resolved',
-    messages: [
-      {
-        id: 'msg_r4_1',
-        sender: 'customer',
-        text: 'Can I confirm my consultation booking for tomorrow?',
-        timestamp: new Date(Date.now() - 3.2 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_r4_2',
-        sender: 'agent',
-        text: 'Your consultation is confirmed for tomorrow at 2:30 PM. We look forward to speaking with you!',
-        timestamp: new Date(Date.now() - 3.1 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'msg_r4_3',
-        sender: 'customer',
-        text: 'Got it, see you tomorrow at 2:30 PM!',
-        timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-      },
-    ],
-  },
-];
 
 export function renderConversationStatusBadge(status: ConversationStatus) {
   switch (status) {
@@ -218,14 +86,9 @@ export const InboxPage: React.FC<InboxPageProps> = ({
     }
   });
 
-  const [fallbackConversations, setFallbackConversations] = useState<Conversation[]>(
-    INITIAL_FALLBACK_CONVERSATIONS
-  );
-
-  // Merge prop conversations (or fallback conversations if none exist yet) with frontend overrides
+  // Merge prop conversations with frontend overrides
   const displayConversations = useMemo(() => {
-    const baseList =
-      conversations && conversations.length > 0 ? conversations : fallbackConversations;
+    const baseList = conversations || [];
 
     return baseList.map((conv) => {
       const override = statusOverrides[conv.id];
@@ -238,7 +101,7 @@ export const InboxPage: React.FC<InboxPageProps> = ({
         unread: override.unread !== undefined ? override.unread : conv.unread,
       };
     });
-  }, [conversations, fallbackConversations, statusOverrides]);
+  }, [conversations, statusOverrides]);
 
   const [activeFilter, setActiveFilter] = useState<InboxFilterType>('all');
   const [selectedConvId, setSelectedConvId] = useState<string>(
@@ -315,9 +178,6 @@ export const InboxPage: React.FC<InboxPageProps> = ({
       handoffReason: updated.handoffReason,
       unread: updated.unread,
     });
-    setFallbackConversations((prev) =>
-      prev.map((c) => (c.id === updated.id ? updated : c))
-    );
     onUpdateConversation(updated);
   };
 
@@ -652,7 +512,9 @@ export const InboxPage: React.FC<InboxPageProps> = ({
         <div className="space-y-2.5">
           {filteredConversations.length === 0 ? (
             <div className="surface-card p-6 text-center text-sm text-muted-foreground">
-              No conversations matching this filter.
+              {displayConversations.length === 0
+                ? 'No conversations yet. Customer conversations from your connected channels will appear here.'
+                : 'No conversations matching this filter.'}
             </div>
           ) : (
             filteredConversations.map((conv) => {
@@ -1041,7 +903,9 @@ export const InboxPage: React.FC<InboxPageProps> = ({
           </div>
         ) : (
           <div className="surface-card p-12 text-center text-sm text-muted-foreground">
-            Select a conversation to inspect messages.
+            {displayConversations.length === 0
+              ? 'Your inbox is empty. Messages from connected channels will appear here automatically.'
+              : 'Select a conversation to inspect messages.'}
           </div>
         )}
       </div>

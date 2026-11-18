@@ -333,7 +333,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <UserIcon className="size-4.5 text-primary" />
-                <span>Profile &amp; Account</span>
+                <span>Profile</span>
               </button>
 
               <div className="border-t border-border my-2 pt-2">
