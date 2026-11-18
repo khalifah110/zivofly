@@ -84,8 +84,8 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
         body: JSON.stringify(updatedPayload),
       });
 
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
         if (onAgentUpdated && data.agent) {
           onAgentUpdated(data.agent);
         }
@@ -96,9 +96,10 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
         );
       } else {
         toast.error(
-          nextStatus === 'paused'
-            ? 'Failed to pause agent'
-            : 'Failed to resume agent'
+          data?.error ||
+            (nextStatus === 'paused'
+              ? 'Failed to pause agent'
+              : 'Failed to resume agent')
         );
       }
     } catch {
