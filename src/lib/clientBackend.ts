@@ -514,13 +514,36 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     if (method === 'PUT') {
       const userId = await resolveCurrentUserId();
       const baseAgent = idx !== -1 ? agents[idx] : { ...DEFAULT_AGENT, id: agentId };
+      const statusChanged =
+        typeof body?.status === 'string' && body.status !== baseAgent.status;
       let updated = { ...baseAgent, ...body, updatedAt: new Date().toISOString() };
+
+      if (
+        statusChanged &&
+        isSupabaseConfigured &&
+        (!userId || userId.startsWith('user_default'))
+      ) {
+        return jsonResponse(
+          { error: 'Sign in again before changing the agent status.' },
+          401,
+        );
+      }
+
       if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
         try {
           const supaAgent = await updateSupabaseAgent(agentId, updated, userId);
           if (supaAgent) updated = supaAgent;
         } catch (e) {
           console.warn('[Zivofly] Supabase agent update error:', e);
+          if (statusChanged) {
+            return jsonResponse(
+              {
+                error:
+                  'Could not confirm that the agent status was saved. Refresh the page before trying again.',
+              },
+              502,
+            );
+          }
         }
       }
       if (idx !== -1) {
