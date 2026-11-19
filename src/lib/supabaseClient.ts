@@ -51,7 +51,10 @@ const supabaseCustomFetch: typeof fetch = async (input, init) => {
       ? input.toString()
       : input?.url || '';
 
-  if (requestUrl.includes('/functions/v1/google_workspace')) {
+  if (
+    requestUrl.includes('/functions/v1/google_workspace') ||
+    requestUrl.includes('/functions/v1/workspace_invites')
+  ) {
     const cleanedHeaders = new Headers(init?.headers);
     cleanedHeaders.delete('x-client-info');
     cleanedHeaders.delete('X-Client-Info');

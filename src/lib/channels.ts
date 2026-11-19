@@ -20,7 +20,7 @@ export const CHANNELS: Record<string, ChannelMeta> = {
     steps: [
       'Choose your business number',
       'Confirm it in the secure Meta window',
-      'Pick or create your agent',
+      'Pick your agent',
       'Go live'
     ],
     supportsComments: false
@@ -35,7 +35,7 @@ export const CHANNELS: Record<string, ChannelMeta> = {
     steps: [
       'Sign in with Instagram',
       'Allow training on your profile',
-      'Pick or create your agent',
+      'Pick your agent',
       'Go live'
     ],
     supportsComments: true
@@ -50,7 +50,7 @@ export const CHANNELS: Record<string, ChannelMeta> = {
     steps: [
       'Sign in with TikTok',
       'Allow training on your profile',
-      'Pick or create your agent',
+      'Pick your agent',
       'Go live'
     ],
     supportsComments: true
@@ -65,7 +65,7 @@ export const CHANNELS: Record<string, ChannelMeta> = {
     steps: [
       'Add your business number',
       'Verify it',
-      'Pick or create your agent',
+      'Pick your agent',
       'Go live'
     ],
     supportsComments: false
@@ -80,7 +80,7 @@ export const CHANNELS: Record<string, ChannelMeta> = {
     steps: [
       'Sign in with Facebook',
       'Allow training on your Page',
-      'Pick or create your agent',
+      'Pick your agent',
       'Go live'
     ],
     supportsComments: true

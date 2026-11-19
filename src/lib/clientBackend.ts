@@ -18,6 +18,7 @@ import {
   getSupabaseConversations,
   createSupabaseConversation,
   sendSupabaseMessage,
+  updateSupabaseConversationStatus,
   saveSupabaseConversationFeedback,
   getSupabaseConversationFeedback,
 } from './supabaseService';
@@ -259,9 +260,18 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     const name = body?.name || email.split('@')[0] || 'User';
     const businessName = body?.businessName || '';
 
+    const emailRedirectTo =
+      typeof body?.emailRedirectTo === 'string' && body.emailRedirectTo.trim()
+        ? body.emailRedirectTo.trim()
+        : undefined;
+
     if (isSupabaseConfigured) {
       try {
-        const result = await signUpWithSupabase(email, password, { name, businessName });
+        const result = await signUpWithSupabase(email, password, {
+          name,
+          businessName,
+          emailRedirectTo,
+        });
         if (result) {
           if (result.session) {
             setStored(STORAGE_KEYS.USER, result.user);
@@ -889,22 +899,37 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const takeoverMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/takeover$/);
   if (takeoverMatch && method === 'POST') {
     const convId = takeoverMatch[1];
+    const userId = await resolveCurrentUserId();
     const convs = getStored<Conversation[]>(STORAGE_KEYS.CONVERSATIONS, DEFAULT_CONVERSATIONS);
     let conv = convs.find(c => c.id === convId);
     if (!conv && body?.conversation) {
       conv = { ...body.conversation };
       convs.unshift(conv!);
     }
+
+    const resolveNextStatus = (currentStatus?: Conversation['status']): Conversation['status'] => {
+      if (body?.status) return body.status;
+      if (body?.target === 'human') return 'human_takeover';
+      if (body?.target === 'human_needed') return 'human_needed';
+      if (body?.target === 'resolved') return 'resolved';
+      if (body?.target === 'agent') return 'agent_active';
+      return currentStatus === 'human_takeover' ? 'agent_active' : 'human_takeover';
+    };
+
     if (!conv) {
-      const nextStatus =
-        body?.status ||
-        (body?.target === 'human'
-          ? 'human_takeover'
-          : body?.target === 'human_needed'
-          ? 'human_needed'
-          : body?.target === 'resolved'
-          ? 'resolved'
-          : 'agent_active');
+      const nextStatus = resolveNextStatus();
+      if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
+        try {
+          await updateSupabaseConversationStatus(
+            convId,
+            nextStatus,
+            body?.handoffReason,
+            userId
+          );
+        } catch (e) {
+          console.warn('[Zivofly] Supabase takeover status update warning:', e);
+        }
+      }
       return jsonResponse({
         conversation: {
           id: convId,
@@ -915,22 +940,27 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       });
     }
 
-    if (body?.status) {
-      conv.status = body.status;
-    } else if (body?.target) {
-      if (body.target === 'human') conv.status = 'human_takeover';
-      else if (body.target === 'human_needed') conv.status = 'human_needed';
-      else if (body.target === 'resolved') conv.status = 'resolved';
-      else conv.status = 'agent_active';
-    } else {
-      conv.status = conv.status === 'human_takeover' ? 'agent_active' : 'human_takeover';
-    }
+    conv.status = resolveNextStatus(conv.status);
     if (body?.handoffReason !== undefined) {
       conv.handoffReason = body.handoffReason;
     }
     if (conv.status === 'agent_active') {
       conv.missedMessagesCountWhilePaused = 0;
     }
+
+    if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
+      try {
+        await updateSupabaseConversationStatus(
+          convId,
+          conv.status,
+          conv.handoffReason,
+          userId
+        );
+      } catch (e) {
+        console.warn('[Zivofly] Supabase takeover status update warning:', e);
+      }
+    }
+
     setStored(STORAGE_KEYS.CONVERSATIONS, convs);
     return jsonResponse({ conversation: conv, resumed: conv.status === 'agent_active' });
   }
@@ -1038,12 +1068,23 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const msgMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/(messages|reply)$/);
   if (msgMatch && method === 'POST') {
     const convId = msgMatch[1];
+    const userId = await resolveCurrentUserId();
     const convs = getStored<Conversation[]>(STORAGE_KEYS.CONVERSATIONS, DEFAULT_CONVERSATIONS);
     const conv = convs.find(c => c.id === convId);
-    if (!conv) return jsonResponse({ error: 'Conversation not found' }, 404);
-
     const sender = (body?.sender || body?.role || 'agent') as 'customer' | 'agent' | 'human';
     const text = body?.text || body?.message || body?.content || '';
+
+    if (!conv) {
+      if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
+        try {
+          const savedMsg = await sendSupabaseMessage(convId, text, sender as any, userId);
+          return jsonResponse({ message: savedMsg });
+        } catch (e: any) {
+          return jsonResponse({ error: e?.message || 'Failed to send message' }, 400);
+        }
+      }
+      return jsonResponse({ error: 'Conversation not found' }, 404);
+    }
 
     const newMsg = {
       id: `msg_${Date.now()}`,
@@ -1057,7 +1098,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 
     if (isSupabaseConfigured) {
       try {
-        await sendSupabaseMessage(convId, text, sender as any);
+        await sendSupabaseMessage(convId, text, sender as any, userId);
       } catch (e) {
         console.warn('[Zivofly] Supabase send message error, stored locally:', e);
       }

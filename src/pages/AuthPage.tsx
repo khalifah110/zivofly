@@ -1,23 +1,74 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { AlertCircle, ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Loader2, CheckCircle2, UserPlus } from 'lucide-react';
 import { User } from '../types';
 import { apiFetch } from '../lib/api';
 import { supabase } from '../lib/supabaseClient';
+import { PENDING_INVITE_TOKEN_STORAGE_KEY } from '../lib/supabaseService';
 
 interface AuthPageProps {
   onSignInSuccess: (user: User) => void;
   onNavigate: (path: string) => void;
 }
 
+function resolvePendingInviteToken(): string {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams(window.location.search);
+  const queryToken = (
+    params.get('invite_token') ||
+    params.get('token') ||
+    ''
+  ).trim();
+  if (queryToken) {
+    try {
+      sessionStorage.setItem(PENDING_INVITE_TOKEN_STORAGE_KEY, queryToken);
+    } catch {
+      // ignore storage failures
+    }
+    return queryToken;
+  }
+  try {
+    return (sessionStorage.getItem(PENDING_INVITE_TOKEN_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate }) => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot_password'>('signin');
+  const [inviteToken] = useState<string>(() => resolvePendingInviteToken());
+  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot_password'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'signup') return 'signup';
+    }
+    return 'signin';
+  });
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('email') || '';
+    }
+    return '';
+  });
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resetEmailSent, setResetEmailSent] = useState(false);
+
+  const acceptInvitePath = inviteToken
+    ? `/accept-invite?invite_token=${encodeURIComponent(inviteToken)}`
+    : '/dashboard';
+
+  useEffect(() => {
+    if (inviteToken && typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.get('invite_token')) {
+        params.set('invite_token', inviteToken);
+        window.history.replaceState({}, '', `/auth?${params.toString()}`);
+      }
+    }
+  }, [inviteToken]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,6 +107,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
 
     try {
       const endpoint = mode === 'signup' ? '/api/auth/register' : '/api/auth/login';
+      const emailRedirectTo =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}${acceptInvitePath}`
+          : undefined;
       const res = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -64,6 +119,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
           password,
           name: name.trim(),
           businessName: '',
+          emailRedirectTo,
         }),
       });
 
@@ -74,13 +130,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
           localStorage.setItem('zivofly_token', data.token);
         }
         if (data.needsEmailConfirmation) {
-          toast.success('Account created! Please check your email inbox to confirm your account, then sign in.', { duration: 7000 });
+          toast.success(
+            inviteToken
+              ? 'Account created! Verify your email via the link in your inbox to complete joining the workspace.'
+              : 'Account created! Please check your email inbox to confirm your account, then sign in.',
+            { duration: 7000 }
+          );
           setMode('signin');
           setErrorMessage(null);
         } else {
           onSignInSuccess(data.user);
           toast.success(mode === 'signup' ? 'Account created successfully!' : 'Welcome back!');
-          onNavigate('/dashboard');
+          onNavigate(acceptInvitePath);
         }
       } else {
         const errText = data.error || (mode === 'signup' ? 'Registration failed' : 'Invalid email or password');
@@ -102,10 +163,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
 
     try {
       if (supabase) {
+        const redirectTo = `${window.location.origin}${acceptInvitePath}`;
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
-            redirectTo: window.location.origin + '/dashboard',
+            redirectTo,
           },
         });
         if (error) {
@@ -125,7 +187,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
         localStorage.setItem('zivofly_token', 'demo_token_123');
         onSignInSuccess(fallbackUser);
         toast.success('Signed in with Google');
-        onNavigate('/dashboard');
+        onNavigate(acceptInvitePath);
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Google sign in failed');
@@ -179,6 +241,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
                   ? 'Sign in to manage your agents and customer conversations.'
                   : 'Start automating your customer conversations with autonomous AI agents.'}
               </p>
+            </div>
+          )}
+
+          {inviteToken && (
+            <div className="mt-4 rounded-xl border border-primary/30 bg-primary/10 p-3 text-xs text-foreground flex items-start gap-2">
+              <UserPlus className="size-4 text-primary shrink-0 mt-0.5" />
+              <span>
+                Sign in or create an account with the verified email address that received the workspace invitation.
+              </span>
             </div>
           )}
 

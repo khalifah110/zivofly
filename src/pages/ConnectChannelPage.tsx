@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Check, Lock, ExternalLink, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CHANNELS } from '../lib/channels';
-import { Agent, GoogleSheetToolConfig, PlatformType } from '../types';
+import { Agent } from '../types';
 import { apiFetch } from '../lib/api';
-import { GoogleSheetToolSection } from '../components/GoogleSheetToolSection';
-import { GOOGLE_SHEET_TEMPLATES } from '../data/sheetTemplates';
 import { MetaOAuthModal } from '../components/MetaOAuthModal';
 
 interface ConnectChannelPageProps {
@@ -13,7 +11,6 @@ interface ConnectChannelPageProps {
   agents: Agent[];
   onNavigate: (path: string) => void;
   onConnectionCreated: (newConn: any) => void;
-  onAgentCreated: (newAgent: Agent) => void;
 }
 
 export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
@@ -21,7 +18,6 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
   agents,
   onNavigate,
   onConnectionCreated,
-  onAgentCreated,
 }) => {
   const channel = CHANNELS[channelKey] || CHANNELS.whatsapp;
   const isCall = channel.key === 'call';
@@ -45,16 +41,16 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
     phoneNumber?: string;
   } | null>(null);
 
-  const [agentChoice, setAgentChoice] = useState<'existing' | 'new'>(
-    agents.length > 0 ? 'existing' : 'new'
-  );
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.id || '');
-  const [newAgentName, setNewAgentName] = useState('');
-  const [newAgentDuties, setNewAgentDuties] = useState('');
-  const [sheetToolConfig, setSheetToolConfig] = useState<GoogleSheetToolConfig>(
-    GOOGLE_SHEET_TEMPLATES[0].config
-  );
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (agents.length > 0 && !agents.some((a) => a.id === selectedAgentId)) {
+      setSelectedAgentId(agents[0].id);
+    } else if (agents.length === 0 && selectedAgentId) {
+      setSelectedAgentId('');
+    }
+  }, [agents, selectedAgentId]);
 
   const isMetaWindowStep =
     channel.steps[step] === 'Confirm it in the secure Meta window' ||
@@ -90,34 +86,8 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
 
   const handleFinish = async () => {
     setIsSubmitting(true);
-    let finalAgentId = selectedAgentId;
 
     try {
-      // If user chose to create a new agent
-      if (agentChoice === 'new') {
-        const agentName = newAgentName.trim() || `${channel.name} Assistant`;
-        const res = await apiFetch('/api/agents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: agentName,
-            description: `Agent automated for ${channel.name} with Google Sheet integration`,
-            roleAndDuties:
-              newAgentDuties.trim() ||
-              `Assist customers who reach out via ${channel.name}. Query the connected Google Sheet database for prices, availability, and products.`,
-            platforms: [channel.key as PlatformType],
-            tools: {
-              googleSheet: sheetToolConfig,
-            },
-          }),
-        });
-        if (res.ok) {
-          const agentData = await res.json();
-          finalAgentId = agentData.agent.id;
-          onAgentCreated(agentData.agent);
-        }
-      }
-
       // Create the channel connection
       const connRes = await apiFetch('/api/connections', {
         method: 'POST',
@@ -126,7 +96,7 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
           channel: channel.key,
           display_name: accountHandle,
           handle: accountHandle,
-          agent_id: finalAgentId || null,
+          agent_id: selectedAgentId || null,
           reply_dms: true,
           reply_comments: channel.supportsComments,
           reply_tags: channel.key === 'instagram' || channel.key === 'tiktok',
@@ -402,107 +372,40 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
               {channel.steps[2]}
             </h2>
 
-            <div className="space-y-3">
-              <label
-                className={`flex items-center gap-3 rounded-xl border border-border p-4 ${
-                  agents.length > 0 ? 'cursor-pointer' : 'opacity-60'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="agentChoice"
-                  disabled={agents.length === 0}
-                  checked={agentChoice === 'existing'}
-                  onChange={() => setAgentChoice('existing')}
-                  className="size-4 accent-primary"
-                />
-                <span className="text-sm font-medium text-foreground">
-                  Use existing agent
-                </span>
-              </label>
-
-              {agentChoice === 'existing' && agents.length > 0 && (
-                <div className="ml-5 space-y-2 border-l border-border pl-5">
-                  {agents.map((ag) => (
-                    <label
-                      key={ag.id}
-                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3.5 transition-colors ${
-                        selectedAgentId === ag.id
-                          ? 'border-primary bg-accent'
-                          : 'border-border hover:bg-accent/40'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="radio"
-                          name="existingAgent"
-                          checked={selectedAgentId === ag.id}
-                          onChange={() => setSelectedAgentId(ag.id)}
-                          className="size-4 accent-primary"
-                        />
-                        <span className="text-sm font-medium text-foreground">
-                          {ag.name}
-                        </span>
-                      </div>
-                      <span className="text-xs text-muted-foreground line-clamp-1 max-w-[200px]">
-                        {ag.roleAndDuties}
+            {agents.length > 0 ? (
+              <div className="space-y-2.5">
+                {agents.map((ag) => (
+                  <label
+                    key={ag.id}
+                    className={`flex cursor-pointer items-center justify-between rounded-xl border p-3.5 transition-colors ${
+                      selectedAgentId === ag.id
+                        ? 'border-primary bg-accent'
+                        : 'border-border hover:bg-accent/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="existingAgent"
+                        checked={selectedAgentId === ag.id}
+                        onChange={() => setSelectedAgentId(ag.id)}
+                        className="size-4 accent-primary"
+                      />
+                      <span className="text-sm font-medium text-foreground">
+                        {ag.name}
                       </span>
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-border p-4">
-                <input
-                  type="radio"
-                  name="agentChoice"
-                  checked={agentChoice === 'new'}
-                  onChange={() => setAgentChoice('new')}
-                  className="size-4 accent-primary"
-                />
-                <span className="text-sm font-medium text-foreground">
-                  Create a new agent
-                </span>
-              </label>
-
-              {agentChoice === 'new' && (
-                <div className="ml-5 space-y-3 border-l border-border pl-5 pt-1">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-foreground">
-                      Agent name
-                    </label>
-                    <input
-                      type="text"
-                      value={newAgentName}
-                      onChange={(e) => setNewAgentName(e.target.value)}
-                      placeholder="e.g. VIP Concierge, Night Support"
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-foreground">
-                      What should this agent do?
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={newAgentDuties}
-                      onChange={(e) => setNewAgentDuties(e.target.value)}
-                      placeholder="Describe what this agent does, what it should never do, and how it sounds."
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Section: Tool (Google Sheet Database) */}
-                  <div className="pt-2">
-                    <GoogleSheetToolSection
-                      value={sheetToolConfig}
-                      onChange={setSheetToolConfig}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
+                    </div>
+                    <span className="text-xs text-muted-foreground line-clamp-1 max-w-[200px]">
+                      {ag.roleAndDuties}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-border bg-secondary/30 p-5 text-sm text-muted-foreground">
+                No agents found in your account yet. You can continue connecting this channel now and assign an agent later from channel settings.
+              </div>
+            )}
           </div>
         )}
 
@@ -537,9 +440,7 @@ export const ConnectChannelPage: React.FC<ConnectChannelPageProps> = ({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Selected agent:</span>
                 <span className="font-medium text-foreground">
-                  {agentChoice === 'new'
-                    ? newAgentName || 'New Assistant'
-                    : agents.find((a) => a.id === selectedAgentId)?.name || 'Default Agent'}
+                  {agents.find((a) => a.id === selectedAgentId)?.name || 'No agent assigned'}
                 </span>
               </div>
             </div>

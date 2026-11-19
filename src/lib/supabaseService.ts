@@ -13,10 +13,16 @@ import {
   GoogleAuthorizedResource,
   GoogleSelectedResourcesResult,
   GooglePickerTokenPayload,
+  WorkspaceMembership,
+  WorkspaceRole,
+  WorkspaceInvite,
 } from '../types';
 import { isCorruptedDocxText } from './fileTextExtractor';
 
 export const CONFIG_DOC_TITLE = '__agent_extended_config__';
+export const PENDING_INVITE_TOKEN_STORAGE_KEY = 'zivofly_pending_invite_token';
+const ACTIVE_WORKSPACE_STORAGE_PREFIX = 'zivofly_active_workspace_v1_';
+const JOINED_WORKSPACE_NAMES_KEY = 'zivofly_joined_workspace_names_v1';
 
 // Cache workspaceId per userId in memory to minimize redundant round-trips
 const workspaceCache = new Map<string, string>();
@@ -50,9 +56,229 @@ export function mapSupabaseProfileToUser(row: any, authUser?: any, fallbackEmail
   };
 }
 
+export function normalizeWorkspaceRole(
+  rawRole?: string | null,
+  isOwner = false
+): WorkspaceRole {
+  if (isOwner) return 'owner';
+  const normalized = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : '';
+  if (normalized === 'owner') return 'owner';
+  if (normalized === 'admin') return 'admin';
+  return 'member';
+}
+
+export function getStoredActiveWorkspaceId(userId: string): string | null {
+  if (!userId || typeof window === 'undefined') return null;
+  try {
+    const val = window.localStorage.getItem(`${ACTIVE_WORKSPACE_STORAGE_PREFIX}${userId}`);
+    return val && isValidUuid(val) ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveJoinedWorkspaceNameHint(workspaceId: string, name: string): void {
+  if (!workspaceId || !name || typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(JOINED_WORKSPACE_NAMES_KEY);
+    const map: Record<string, string> = raw ? JSON.parse(raw) : {};
+    map[workspaceId] = name;
+    window.localStorage.setItem(JOINED_WORKSPACE_NAMES_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function getJoinedWorkspaceNameHint(workspaceId: string): string | null {
+  if (!workspaceId || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(JOINED_WORKSPACE_NAMES_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw);
+    return typeof map?.[workspaceId] === 'string' && map[workspaceId].trim()
+      ? map[workspaceId].trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveWorkspaceId(
+  userId: string,
+  workspaceId: string,
+  workspaceName?: string
+): void {
+  if (!userId || !workspaceId) return;
+  workspaceCache.set(userId, workspaceId);
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(`${ACTIVE_WORKSPACE_STORAGE_PREFIX}${userId}`, workspaceId);
+    } catch {
+      // ignore storage failures
+    }
+  }
+  if (workspaceName) {
+    saveJoinedWorkspaceNameHint(workspaceId, workspaceName);
+  }
+}
+
+export function clearActiveWorkspaceCache(userId?: string): void {
+  if (userId) {
+    workspaceCache.delete(userId);
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(`${ACTIVE_WORKSPACE_STORAGE_PREFIX}${userId}`);
+      } catch {
+        // ignore
+      }
+    }
+  } else {
+    workspaceCache.clear();
+  }
+}
+
+/**
+ * Verify if `candidateWorkspaceId` belongs to `userId` (either owned or in `workspace_members`).
+ */
+async function userHasWorkspaceAccess(
+  userId: string,
+  candidateWorkspaceId: string
+): Promise<boolean> {
+  if (!supabase || !isValidUuid(candidateWorkspaceId)) return false;
+
+  const { data: owned } = await supabase
+    .from('workspaces')
+    .select('id')
+    .eq('id', candidateWorkspaceId)
+    .eq('owner_user_id', userId)
+    .maybeSingle();
+  if (owned?.id) return true;
+
+  const { data: member } = await supabase
+    .from('workspace_members')
+    .select('workspace_id')
+    .eq('workspace_id', candidateWorkspaceId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  return Boolean(member?.workspace_id);
+}
+
+/**
+ * Returns all workspaces the signed-in user owns or has joined via `workspace_members`.
+ */
+export async function getUserWorkspaceMemberships(
+  userId: string
+): Promise<WorkspaceMembership[]> {
+  if (!supabase || !userId) return [];
+
+  const byId = new Map<string, WorkspaceMembership>();
+
+  try {
+    const [{ data: ownedRows }, { data: memberRows }] = await Promise.all([
+      supabase
+        .from('workspaces')
+        .select('id, name, owner_user_id, status')
+        .eq('owner_user_id', userId)
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('workspace_members')
+        .select('workspace_id, member_role')
+        .eq('user_id', userId),
+    ]);
+
+    for (const ws of ownedRows || []) {
+      if (!ws?.id) continue;
+      byId.set(ws.id, {
+        id: ws.id,
+        name: ws.name || 'My Workspace',
+        role: 'owner',
+        ownerUserId: ws.owner_user_id,
+        status: ws.status || 'active',
+      });
+    }
+
+    const memberIdsToLookup: string[] = [];
+    const roleByWsId = new Map<string, WorkspaceRole>();
+
+    for (const m of memberRows || []) {
+      if (!m?.workspace_id) continue;
+      const role = normalizeWorkspaceRole(m.member_role, false);
+      roleByWsId.set(m.workspace_id, role);
+      if (!byId.has(m.workspace_id)) {
+        memberIdsToLookup.push(m.workspace_id);
+      }
+    }
+
+    if (memberIdsToLookup.length > 0) {
+      const { data: joinedWsRows } = await supabase
+        .from('workspaces')
+        .select('id, name, owner_user_id, status')
+        .in('id', memberIdsToLookup);
+
+      const wsRowMap = new Map<string, any>();
+      for (const row of joinedWsRows || []) {
+        if (row?.id) wsRowMap.set(row.id, row);
+      }
+
+      for (const wsId of memberIdsToLookup) {
+        const row = wsRowMap.get(wsId);
+        const isOwner = row?.owner_user_id === userId;
+        const role = normalizeWorkspaceRole(roleByWsId.get(wsId), isOwner);
+        const fallbackName =
+          getJoinedWorkspaceNameHint(wsId) ||
+          (role === 'owner' ? 'My Workspace' : 'Team Workspace');
+
+        byId.set(wsId, {
+          id: wsId,
+          name: (typeof row?.name === 'string' && row.name.trim()) || fallbackName,
+          role,
+          ownerUserId: row?.owner_user_id,
+          status: row?.status || 'active',
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[Zivofly] Failed to load workspace memberships:', err);
+  }
+
+  if (byId.size === 0) {
+    try {
+      const fallbackWsId = await getOrCreateUserWorkspace(userId);
+      if (fallbackWsId) {
+        const { data: wsRow } = await supabase
+          .from('workspaces')
+          .select('id, name, owner_user_id, status')
+          .eq('id', fallbackWsId)
+          .maybeSingle();
+
+        byId.set(fallbackWsId, {
+          id: fallbackWsId,
+          name: wsRow?.name || 'My Workspace',
+          role:
+            wsRow?.owner_user_id && wsRow.owner_user_id !== userId
+              ? 'member'
+              : 'owner',
+          ownerUserId: wsRow?.owner_user_id || userId,
+          status: wsRow?.status || 'active',
+        });
+      }
+    } catch (e) {
+      console.warn('[Zivofly] Fallback workspace creation warning:', e);
+    }
+  }
+
+  // Sort owned workspaces first, then joined workspaces
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.role === 'owner' && b.role !== 'owner') return -1;
+    if (a.role !== 'owner' && b.role === 'owner') return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 /**
  * Ensure the authenticated user has a row in `profiles` and a workspace in `workspaces` + `workspace_members`.
- * Returns the workspace UUID for this user.
+ * Respects the user's selected active workspace ID if valid.
+ * Returns the active workspace UUID for this user.
  */
 export async function getOrCreateUserWorkspace(
   userId: string,
@@ -65,6 +291,16 @@ export async function getOrCreateUserWorkspace(
   const cached = workspaceCache.get(userId);
   if (cached) return cached;
 
+  // 0. Check persisted active workspace selection
+  const storedActive = getStoredActiveWorkspaceId(userId);
+  if (storedActive) {
+    const hasAccess = await userHasWorkspaceAccess(userId, storedActive);
+    if (hasAccess) {
+      workspaceCache.set(userId, storedActive);
+      return storedActive;
+    }
+  }
+
   // 1. Check workspaces owned by this user
   const { data: ownedWs } = await supabase
     .from('workspaces')
@@ -75,7 +311,7 @@ export async function getOrCreateUserWorkspace(
     .maybeSingle();
 
   if (ownedWs?.id) {
-    workspaceCache.set(userId, ownedWs.id);
+    setActiveWorkspaceId(userId, ownedWs.id);
     return ownedWs.id;
   }
 
@@ -88,7 +324,7 @@ export async function getOrCreateUserWorkspace(
     .maybeSingle();
 
   if (memberWs?.workspace_id) {
-    workspaceCache.set(userId, memberWs.workspace_id);
+    setActiveWorkspaceId(userId, memberWs.workspace_id);
     return memberWs.workspace_id;
   }
 
@@ -279,7 +515,7 @@ export function mapSupabaseConnectionToFrontend(row: any, userId = ''): ChannelC
 export async function signUpWithSupabase(
   email: string,
   password: string,
-  metadata?: { name?: string; businessName?: string }
+  metadata?: { name?: string; businessName?: string; emailRedirectTo?: string }
 ): Promise<{ user: User; session: any } | null> {
   if (!supabase) throw new Error('Supabase client is not configured.');
 
@@ -290,6 +526,7 @@ export async function signUpWithSupabase(
     email,
     password,
     options: {
+      emailRedirectTo: metadata?.emailRedirectTo,
       data: {
         full_name: fullName,
         business_name: businessName,
@@ -2885,6 +3122,13 @@ export async function getSupabaseConversations(userId: string): Promise<Conversa
       });
 
     const latestMsg = sortedMessages[sortedMessages.length - 1];
+    const resolvedStatus: Conversation['status'] =
+      row.status === 'human_takeover' ||
+      row.status === 'human_needed' ||
+      row.status === 'resolved' ||
+      row.status === 'agent_active'
+        ? row.status
+        : 'agent_active';
 
     return {
       id: row.id,
@@ -2897,7 +3141,13 @@ export async function getSupabaseConversations(userId: string): Promise<Conversa
       lastMessageText: latestMsg?.text || meta.lastMessageText || '',
       lastMessageTime: row.last_message_at || row.created_at || new Date().toISOString(),
       unread: meta.unread ?? false,
-      status: row.status === 'human_takeover' ? 'human_takeover' : 'agent_active',
+      status: resolvedStatus,
+      handoffReason:
+        typeof meta.handoffReason === 'string' && meta.handoffReason.trim()
+          ? meta.handoffReason.trim()
+          : typeof row.handoff_reason === 'string' && row.handoff_reason.trim()
+          ? row.handoff_reason.trim()
+          : undefined,
       rating: convFeedback ? Number(convFeedback.rating) : meta.rating,
       feedbackComment: convFeedback
         ? convFeedback.comment ?? ''
@@ -5310,3 +5560,415 @@ export async function processGoogleWorkspaceOAuthCallbackFromUrl(params?: {
       : `Connected ${serviceLabel} successfully!`,
   };
 }
+
+// ==========================================
+// CONVERSATION HANDOFF PERSISTENCE & TEAM INVITES
+// ==========================================
+
+export async function updateSupabaseConversationStatus(
+  conversationId: string,
+  status: Conversation['status'],
+  handoffReason?: string,
+  userId?: string
+): Promise<void> {
+  if (!supabase || !isValidUuid(conversationId)) return;
+
+  const workspaceId = userId ? await getOrCreateUserWorkspace(userId) : undefined;
+  const now = new Date().toISOString();
+
+  let lookupQuery = supabase
+    .from('conversations')
+    .select('id, workspace_id, metadata')
+    .eq('id', conversationId);
+
+  if (workspaceId && isValidUuid(workspaceId)) {
+    lookupQuery = lookupQuery.eq('workspace_id', workspaceId);
+  }
+
+  const { data: existingRow } = await lookupQuery.maybeSingle();
+  if (!existingRow?.id) return;
+
+  const prevMeta =
+    existingRow.metadata && typeof existingRow.metadata === 'object'
+      ? existingRow.metadata
+      : {};
+
+  const nextMeta: Record<string, any> = {
+    ...prevMeta,
+  };
+  if (handoffReason !== undefined) {
+    nextMeta.handoffReason = handoffReason;
+  }
+
+  const { error } = await supabase
+    .from('conversations')
+    .update({
+      status,
+      metadata: nextMeta,
+      updated_at: now,
+    })
+    .eq('id', conversationId);
+
+  if (error) {
+    console.warn('[Zivofly] Conversation status update warning:', error.message);
+  }
+}
+
+export interface WorkspaceInviteAcceptOutcome {
+  status: 'accepted' | 'expired' | 'revoked' | 'wrong_account' | 'error';
+  message: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  role?: WorkspaceRole;
+  userEmail?: string | null;
+  invitedEmail?: string | null;
+}
+
+async function parseWorkspaceInvitesResponsePayload(params: {
+  data: any;
+  error: any;
+  response?: Response;
+}): Promise<{
+  payload: any;
+  httpStatus: number;
+  message: string;
+}> {
+  const { data, error, response } = params;
+  const respObj: Response | undefined =
+    response || (error?.context instanceof Response ? error.context : undefined);
+  const httpStatus = respObj?.status ?? (error ? 500 : 200);
+
+  let parsedBody: any = data && typeof data === 'object' ? data : null;
+  if (!parsedBody && respObj) {
+    try {
+      const cloned = respObj.clone();
+      const text = await cloned.text();
+      if (text) {
+        parsedBody = JSON.parse(text);
+      }
+    } catch {
+      // ignore non-JSON body
+    }
+  }
+
+  const rawMsg =
+    (typeof parsedBody?.error === 'string' && parsedBody.error.trim()) ||
+    (typeof parsedBody?.message === 'string' && parsedBody.message.trim()) ||
+    (typeof parsedBody?.reason === 'string' && parsedBody.reason.trim()) ||
+    (typeof error?.message === 'string' && error.message.trim()) ||
+    '';
+
+  return {
+    payload: parsedBody,
+    httpStatus,
+    message: rawMsg,
+  };
+}
+
+function normalizeWorkspaceInviteRow(row: any): WorkspaceInvite | null {
+  if (!row || typeof row !== 'object') return null;
+  const id = String(row.id || row.invitation_id || '').trim();
+  const email = String(row.email || row.invited_email || '').trim();
+  if (!id && !email) return null;
+
+  return {
+    id: id || email,
+    workspace_id: row.workspace_id || undefined,
+    email,
+    status: String(row.status || 'pending').toLowerCase(),
+    role: row.role || row.member_role || 'member',
+    created_at: row.created_at || undefined,
+    expires_at: row.expires_at || undefined,
+    accepted_at: row.accepted_at ?? null,
+    revoked_at: row.revoked_at ?? null,
+  };
+}
+
+export async function listWorkspaceInvites(
+  workspaceId: string
+): Promise<WorkspaceInvite[]> {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured.');
+  }
+  if (!isValidUuid(workspaceId)) {
+    throw new Error('A valid workspace ID is required.');
+  }
+
+  const { accessToken } = await getVerifiedSupabaseAccessToken();
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'workspace_invites',
+    {
+      body: {
+        action: 'list',
+        workspace_id: workspaceId,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  const parsed = await parseWorkspaceInvitesResponsePayload({ data, error, response });
+  if (error || parsed.payload?.error || parsed.payload?.success === false) {
+    throw new Error(parsed.message || 'Failed to load workspace invitations.');
+  }
+
+  const rawList = Array.isArray(parsed.payload)
+    ? parsed.payload
+    : Array.isArray(parsed.payload?.invitations)
+    ? parsed.payload.invitations
+    : Array.isArray(parsed.payload?.invites)
+    ? parsed.payload.invites
+    : Array.isArray(parsed.payload?.data)
+    ? parsed.payload.data
+    : [];
+
+  return rawList
+    .map(normalizeWorkspaceInviteRow)
+    .filter((item): item is WorkspaceInvite => Boolean(item));
+}
+
+export async function sendWorkspaceInvite(
+  workspaceId: string,
+  email: string
+): Promise<{ invite: WorkspaceInvite | null; message: string }> {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured.');
+  }
+  if (!isValidUuid(workspaceId)) {
+    throw new Error('A valid workspace ID is required.');
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    throw new Error('Please enter a valid email address.');
+  }
+
+  const { accessToken } = await getVerifiedSupabaseAccessToken();
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'workspace_invites',
+    {
+      body: {
+        action: 'invite',
+        workspace_id: workspaceId,
+        email: normalizedEmail,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  const parsed = await parseWorkspaceInvitesResponsePayload({ data, error, response });
+  if (error || parsed.payload?.error || parsed.payload?.success === false) {
+    throw new Error(parsed.message || 'Failed to send workspace invitation.');
+  }
+
+  const invite = normalizeWorkspaceInviteRow(
+    parsed.payload?.invitation || parsed.payload?.invite || parsed.payload?.data
+  );
+
+  return {
+    invite,
+    message:
+      (typeof parsed.payload?.message === 'string' && parsed.payload.message.trim()) ||
+      `Invitation sent to ${normalizedEmail}.`,
+  };
+}
+
+export async function revokeWorkspaceInvite(
+  workspaceId: string,
+  invitationId: string
+): Promise<{ message: string }> {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured.');
+  }
+  if (!isValidUuid(workspaceId) || !invitationId.trim()) {
+    throw new Error('Workspace ID and invitation ID are required.');
+  }
+
+  const { accessToken } = await getVerifiedSupabaseAccessToken();
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'workspace_invites',
+    {
+      body: {
+        action: 'revoke',
+        workspace_id: workspaceId,
+        invitation_id: invitationId.trim(),
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  const parsed = await parseWorkspaceInvitesResponsePayload({ data, error, response });
+  if (error || parsed.payload?.error || parsed.payload?.success === false) {
+    throw new Error(parsed.message || 'Failed to revoke workspace invitation.');
+  }
+
+  return {
+    message:
+      (typeof parsed.payload?.message === 'string' && parsed.payload.message.trim()) ||
+      'Invitation revoked.',
+  };
+}
+
+export async function acceptWorkspaceInvite(
+  inviteToken: string
+): Promise<WorkspaceInviteAcceptOutcome> {
+  const token = inviteToken.trim();
+  if (!token) {
+    return {
+      status: 'error',
+      message: 'Missing invitation token in link.',
+    };
+  }
+
+  if (!supabase) {
+    return {
+      status: 'error',
+      message: 'Authentication service is not configured.',
+    };
+  }
+
+  const { accessToken, userId } = await getVerifiedSupabaseAccessToken();
+  const { data: userRes } = await supabase.auth.getUser(accessToken);
+  const authUser = userRes?.user;
+  const userEmail = authUser?.email || null;
+  const isEmailVerified = Boolean(
+    authUser?.email_confirmed_at || authUser?.confirmed_at
+  );
+
+  if (!authUser || !userEmail || !isEmailVerified) {
+    return {
+      status: 'wrong_account',
+      userEmail,
+      message: userEmail
+        ? `Your email address (${userEmail}) is not verified yet. Please verify your email or sign in with the verified email address that received this invite.`
+        : 'Please sign in with the verified email address that received this invite.',
+    };
+  }
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'workspace_invites',
+    {
+      body: {
+        action: 'accept',
+        invite_token: token,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  const parsed = await parseWorkspaceInvitesResponsePayload({ data, error, response });
+  const payload = parsed.payload || {};
+  const statusStr = String(
+    payload.status || payload.invite_status || payload.state || payload.code || ''
+  ).toLowerCase();
+  const msgLower = parsed.message.toLowerCase();
+
+  const hasError = Boolean(
+    error || payload.error || payload.success === false || payload.ok === false
+  );
+
+  if (!hasError) {
+    const joinedWorkspaceId = String(
+      payload.workspace_id ||
+        payload.workspace?.id ||
+        payload.invitation?.workspace_id ||
+        payload.membership?.workspace_id ||
+        ''
+    ).trim();
+    const joinedWorkspaceName =
+      (typeof payload.workspace_name === 'string' && payload.workspace_name.trim()) ||
+      (typeof payload.workspace?.name === 'string' && payload.workspace.name.trim()) ||
+      undefined;
+    const role = normalizeWorkspaceRole(
+      payload.role || payload.member_role || payload.membership?.member_role || 'member',
+      false
+    );
+
+    if (joinedWorkspaceId && isValidUuid(joinedWorkspaceId)) {
+      setActiveWorkspaceId(userId, joinedWorkspaceId, joinedWorkspaceName);
+    }
+
+    return {
+      status: 'accepted',
+      workspaceId: joinedWorkspaceId || undefined,
+      workspaceName: joinedWorkspaceName,
+      role,
+      userEmail,
+      message:
+        (typeof payload.message === 'string' && payload.message.trim()) ||
+        (joinedWorkspaceName
+          ? `You have joined "${joinedWorkspaceName}".`
+          : 'Invitation accepted. You now have access to the workspace.'),
+    };
+  }
+
+  if (statusStr.includes('expired') || parsed.httpStatus === 410 || msgLower.includes('expired')) {
+    return {
+      status: 'expired',
+      userEmail,
+      message:
+        parsed.message ||
+        'This invitation has expired. Ask your workspace owner to send a new invitation.',
+    };
+  }
+
+  if (
+    statusStr.includes('revoked') ||
+    statusStr.includes('cancelled') ||
+    msgLower.includes('revoked') ||
+    msgLower.includes('cancelled')
+  ) {
+    return {
+      status: 'revoked',
+      userEmail,
+      message:
+        parsed.message ||
+        'This invitation has been revoked and can no longer be accepted.',
+    };
+  }
+
+  if (
+    parsed.httpStatus === 403 ||
+    statusStr.includes('wrong') ||
+    statusStr.includes('mismatch') ||
+    statusStr.includes('email') ||
+    msgLower.includes('different email') ||
+    msgLower.includes('does not match') ||
+    msgLower.includes('wrong account') ||
+    msgLower.includes('same email') ||
+    msgLower.includes('invited email') ||
+    msgLower.includes('not match') ||
+    msgLower.includes('recipient') ||
+    msgLower.includes('verified email')
+  ) {
+    return {
+      status: 'wrong_account',
+      userEmail,
+      invitedEmail:
+        typeof payload.invited_email === 'string'
+          ? payload.invited_email
+          : typeof payload.email === 'string'
+          ? payload.email
+          : null,
+      message:
+        parsed.message ||
+        `You are signed in as ${userEmail}, which does not match the invited email address.`,
+    };
+  }
+
+  return {
+    status: 'error',
+    userEmail,
+    message: parsed.message || 'Could not accept this workspace invitation.',
+  };
+}
+

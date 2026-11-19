@@ -20,6 +20,7 @@ import { TakeoverSlider } from '../components/TakeoverSlider';
 interface InboxPageProps {
   conversations: Conversation[];
   onUpdateConversation: (updated: Conversation) => void;
+  isTeamMember?: boolean;
 }
 
 type InboxFilterType = 'all' | 'unread' | 'human_needed' | 'human_handling';
@@ -63,6 +64,7 @@ export function renderConversationStatusBadge(status: ConversationStatus) {
 export const InboxPage: React.FC<InboxPageProps> = ({
   conversations,
   onUpdateConversation,
+  isTeamMember = false,
 }) => {
   // Frontend status/unread/reason overrides so status transitions work seamlessly
   const [statusOverrides, setStatusOverrides] = useState<
@@ -105,8 +107,16 @@ export const InboxPage: React.FC<InboxPageProps> = ({
     displayConversations[0]?.id || ''
   );
   const [messageText, setMessageText] = useState('');
-  const [sendAsRole, setSendAsRole] = useState<'customer' | 'human'>('customer');
+  const [sendAsRole, setSendAsRole] = useState<'customer' | 'human'>(() =>
+    isTeamMember ? 'human' : 'customer'
+  );
   const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (isTeamMember) {
+      setSendAsRole('human');
+    }
+  }, [isTeamMember]);
 
   // Live filter counts
   const unreadCount = useMemo(
@@ -320,9 +330,10 @@ export const InboxPage: React.FC<InboxPageProps> = ({
     setSending(true);
 
     const nowIso = new Date().toISOString();
+    const effectiveSender: 'customer' | 'human' = isTeamMember ? 'human' : sendAsRole;
     const newMsg = {
       id: `msg_${Date.now()}`,
-      sender: sendAsRole,
+      sender: effectiveSender,
       text: content,
       timestamp: nowIso,
     };
@@ -335,8 +346,8 @@ export const InboxPage: React.FC<InboxPageProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          role: sendAsRole,
-          sender: sendAsRole,
+          role: effectiveSender,
+          sender: effectiveSender,
           content,
           text: content,
         }),
@@ -353,6 +364,25 @@ export const InboxPage: React.FC<InboxPageProps> = ({
           setSending(false);
           return;
         }
+        if (data?.message) {
+          const savedMsg = {
+            ...newMsg,
+            ...data.message,
+          };
+          applyConversationUpdate({
+            ...activeConv,
+            messages: [...activeConv.messages, savedMsg],
+            lastMessageText: savedMsg.text || content,
+            lastMessageTime: savedMsg.timestamp || nowIso,
+          });
+          setSending(false);
+          return;
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData?.error || 'Failed to send message.');
+        setSending(false);
+        return;
       }
     } catch {
       // Fallback to local message append for frontend-only conversations
@@ -837,33 +867,35 @@ export const InboxPage: React.FC<InboxPageProps> = ({
                 onSubmit={handleSendMessage}
                 className="border-t border-border p-3 bg-background"
               >
-                <div className="flex items-center justify-between gap-2 mb-2 px-1">
-                  <span className="text-[11px] text-muted-foreground">Send as:</span>
-                  <div className="flex rounded-md border border-border p-0.5 bg-secondary/30">
-                    <button
-                      type="button"
-                      onClick={() => setSendAsRole('customer')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
-                        sendAsRole === 'customer'
-                          ? 'bg-background font-medium text-foreground shadow-xs'
-                          : 'text-muted-foreground'
-                      }`}
-                    >
-                      Customer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSendAsRole('human')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
-                        sendAsRole === 'human'
-                          ? 'bg-background font-medium text-foreground shadow-xs'
-                          : 'text-muted-foreground'
-                      }`}
-                    >
-                      Staff / Human
-                    </button>
+                {!isTeamMember && (
+                  <div className="flex items-center justify-between gap-2 mb-2 px-1">
+                    <span className="text-[11px] text-muted-foreground">Send as:</span>
+                    <div className="flex rounded-md border border-border p-0.5 bg-secondary/30">
+                      <button
+                        type="button"
+                        onClick={() => setSendAsRole('customer')}
+                        className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
+                          sendAsRole === 'customer'
+                            ? 'bg-background font-medium text-foreground shadow-xs'
+                            : 'text-muted-foreground'
+                        }`}
+                      >
+                        Customer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSendAsRole('human')}
+                        className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
+                          sendAsRole === 'human'
+                            ? 'bg-background font-medium text-foreground shadow-xs'
+                            : 'text-muted-foreground'
+                        }`}
+                      >
+                        Staff / Human
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="flex items-center gap-2">
                   <input
