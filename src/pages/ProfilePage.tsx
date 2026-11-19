@@ -113,6 +113,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     void loadWorkspaceInvitesList(activeWorkspace.id);
   }, [activeWorkspace?.id, isTeamMember, loadWorkspaceInvitesList]);
 
+  const hasEnteredValidBusinessName = (rawValue: string) => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return false;
+    if (trimmed === 'My Business') return false;
+    return true;
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -122,13 +129,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
     setIsSaving(true);
     try {
+      const payload: Record<string, string> = {
+        name: name.trim(),
+      };
+      if (!isTeamMember) {
+        payload.businessName = businessName.trim();
+      }
+
       const res = await apiFetch('/api/user/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          businessName: businessName.trim(),
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
@@ -136,7 +147,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         const updated = data.user || {
           ...user,
           name: name.trim(),
-          businessName: businessName.trim(),
+          ...(isTeamMember ? {} : { businessName: businessName.trim() }),
         };
         onUserUpdated(updated);
         toast.success('Profile details saved successfully', {
@@ -159,6 +170,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
       return;
     }
 
+    const trimmedBiz = businessName.trim();
+    if (!hasEnteredValidBusinessName(trimmedBiz)) {
+      toast.error('Please enter your Business Name before sending an invite.');
+      const bizInput = document.getElementById('profile-business-name') as HTMLInputElement | null;
+      bizInput?.focus();
+      return;
+    }
+
     const trimmedEmail = inviteEmail.trim();
     if (!trimmedEmail || !trimmedEmail.includes('@')) {
       toast.error('Please enter a valid email address to invite');
@@ -167,6 +186,29 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
     setIsSendingInvite(true);
     try {
+      const savedBiz = resolveCleanBusinessName(user);
+      if (trimmedBiz !== savedBiz) {
+        const profileRes = await apiFetch('/api/user/profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: (name.trim() || user?.name || '').trim(),
+            businessName: trimmedBiz,
+          }),
+        });
+        if (!profileRes.ok) {
+          toast.error('Failed to save your Business Name before sending the invite.');
+          return;
+        }
+        const profileData = await profileRes.json().catch(() => ({}));
+        const updatedUser = profileData.user || {
+          ...user,
+          name: (name.trim() || user?.name || '').trim(),
+          businessName: trimmedBiz,
+        };
+        onUserUpdated(updatedUser);
+      }
+
       const res = await sendWorkspaceInvite(activeWorkspace.id, trimmedEmail);
       toast.success(res.message || `Invitation sent to ${trimmedEmail}`, {
         icon: <CheckCircle2 className="size-4 text-emerald-500" />,
@@ -323,39 +365,51 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </p>
             </div>
 
-            <div className="space-y-2.5">
-              <div className="space-y-1.5">
-                <label htmlFor="profile-business-name" className="text-xs font-bold text-foreground">
-                  Business Name
-                </label>
-                <div className="relative">
-                  <Building2 className="size-3.5 text-muted-foreground absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    id="profile-business-name"
-                    type="text"
-                    value={businessName}
-                    onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="e.g Zivofly"
-                    className="w-full rounded-xl border border-input bg-card pl-9 pr-3.5 py-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-2xs font-medium"
-                  />
-                </div>
-              </div>
-
-              {!isTeamMember && (
-                <>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => setIsInviteOpen((prev) => !prev)}
-                      className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 hover:bg-primary/20 text-primary px-4 py-2.5 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-                    >
-                      <UserPlus className="size-3.5" />
-                      <span>Invite Team Member</span>
-                    </button>
+            {!isTeamMember && (
+              <div className="space-y-2.5">
+                <div className="space-y-1.5">
+                  <label htmlFor="profile-business-name" className="text-xs font-bold text-foreground">
+                    Business Name
+                  </label>
+                  <div className="relative">
+                    <Building2 className="size-3.5 text-muted-foreground absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      id="profile-business-name"
+                      type="text"
+                      value={businessName}
+                      onChange={(e) => setBusinessName(e.target.value)}
+                      placeholder="e.g Zivofly"
+                      className="w-full rounded-xl border border-input bg-card pl-9 pr-3.5 py-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-2xs font-medium"
+                    />
                   </div>
+                </div>
 
-                  {isInviteOpen && (
-                    <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-3 animate-in fade-in duration-150">
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isInviteOpen && !hasEnteredValidBusinessName(businessName)) {
+                        toast.error('Please enter your Business Name before sending an invite.');
+                        const bizInput = document.getElementById('profile-business-name') as HTMLInputElement | null;
+                        bizInput?.focus();
+                        return;
+                      }
+                      setIsInviteOpen((prev) => !prev);
+                    }}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 hover:bg-primary/20 text-primary px-4 py-2.5 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <UserPlus className="size-3.5" />
+                    <span>Invite Team Member</span>
+                  </button>
+                  {!hasEnteredValidBusinessName(businessName) && (
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Enter your Business Name above before sending team invitations.
+                    </p>
+                  )}
+                </div>
+
+                {isInviteOpen && (
+                  <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-3 animate-in fade-in duration-150">
                       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                         <input
                           type="email"
@@ -478,10 +532,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                         </p>
                       )}
                     </div>
-                  )}
-                </>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
             <div className="pt-3 border-t border-border flex justify-end">
               <button
@@ -506,7 +559,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </h3>
               {activeWorkspace && (
                 <span className="inline-flex items-center rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-[10px] font-semibold text-foreground capitalize">
-                  {isTeamMember ? 'Team Member' : activeWorkspace.role}
+                  {isTeamMember ? 'Member' : activeWorkspace.role}
                 </span>
               )}
             </div>
@@ -530,7 +583,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                     {workspaces.map((ws) => (
                       <option key={ws.id} value={ws.id}>
                         {ws.name}
-                        {ws.role === 'member' ? ' (Team Member)' : ''}
                       </option>
                     ))}
                   </select>
@@ -542,10 +594,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               <div className="space-y-3">
                 <div className="rounded-xl border border-border bg-muted/30 p-3.5 space-y-1.5">
                   <div className="text-xs font-semibold text-foreground">
-                    {activeWorkspace?.name || 'Shared Workspace'}
+                    {activeWorkspace?.name || 'Business Workspace'}
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    As a Team Member, you can view connected channels, reply in the shared inbox, and manage human handoffs.
+                    You can view connected channels, reply in the shared inbox, and manage human handoffs.
                   </p>
                 </div>
 
@@ -560,7 +612,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                   <div className="text-2xl font-bold font-mono text-foreground">
                     {connections.length}
                   </div>
-                  <span className="text-[10px] text-muted-foreground">Connected Lines (Read-only)</span>
+                  <span className="text-[10px] text-muted-foreground">Connected Lines</span>
                 </div>
 
                 <button

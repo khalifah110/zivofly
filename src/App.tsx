@@ -653,7 +653,16 @@ function AppContent() {
           workspaces={workspaces}
           activeWorkspace={activeWorkspace}
           onSwitchWorkspace={handleSwitchWorkspace}
-          onUserUpdated={(updated) => setUser(updated)}
+          onUserUpdated={(updated) => {
+            setUser(updated);
+            if (supabase && updated?.id) {
+              void getUserWorkspaceMemberships(updated.id)
+                .then((memberships) => {
+                  if (memberships.length > 0) setWorkspaces(memberships);
+                })
+                .catch(() => {});
+            }
+          }}
           onAccountDeleted={handleAccountDeleted}
           onNavigate={navigate}
           onSignOut={handleSignOut}

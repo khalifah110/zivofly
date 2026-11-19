@@ -219,7 +219,6 @@ export const Header: React.FC<HeaderProps> = ({
                       {workspaces.map((ws) => (
                         <option key={ws.id} value={ws.id}>
                           {ws.name}
-                          {ws.role === 'member' ? ' (Member)' : ''}
                         </option>
                       ))}
                     </select>
@@ -331,7 +330,6 @@ export const Header: React.FC<HeaderProps> = ({
                       {workspaces.map((ws) => (
                         <option key={ws.id} value={ws.id}>
                           {ws.name}
-                          {ws.role === 'member' ? ' (Team Member)' : ''}
                         </option>
                       ))}
                     </select>

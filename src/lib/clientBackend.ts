@@ -21,6 +21,8 @@ import {
   updateSupabaseConversationStatus,
   saveSupabaseConversationFeedback,
   getSupabaseConversationFeedback,
+  getStoredActiveWorkspaceId,
+  getUserWorkspaceMemberships,
 } from './supabaseService';
 
 export interface ChannelConnection {
@@ -329,9 +331,25 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     if (method === 'PUT') {
       const currentUser = getStored<User | null>(STORAGE_KEYS.USER, null);
       const userId = await resolveCurrentUserId();
+      const incomingBody = { ...(body || {}) };
+
+      if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
+        try {
+          const memberships = await getUserWorkspaceMemberships(userId);
+          const storedWsId = getStoredActiveWorkspaceId(userId);
+          const activeWs =
+            memberships.find((w) => w.id === storedWsId) || memberships[0] || null;
+          if (activeWs?.role === 'member') {
+            delete incomingBody.businessName;
+          }
+        } catch {
+          // ignore workspace lookup failures
+        }
+      }
+
       let updatedUser: User = {
         ...(currentUser || { id: userId, email: '', name: '', businessName: '' }),
-        ...(body || {}),
+        ...incomingBody,
       };
 
       if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
