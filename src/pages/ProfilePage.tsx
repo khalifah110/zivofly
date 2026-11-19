@@ -33,6 +33,9 @@ import {
   listWorkspaceMembers,
   sendWorkspaceInvite,
   revokeWorkspaceInvite,
+  broadcastMemberProfileUpdate,
+  subscribeToWorkspaceMemberProfileUpdates,
+  MemberProfileUpdateEvent,
 } from '../lib/supabaseService';
 import { DeleteAccountModal } from '../components/DeleteAccountModal';
 
@@ -103,35 +106,71 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     }
   }, [user]);
 
+  const invitesRef = React.useRef<WorkspaceInvite[]>([]);
+  React.useEffect(() => {
+    invitesRef.current = invites;
+  }, [invites]);
+
   const loadWorkspaceInvitesList = React.useCallback(
-    async (workspaceId: string) => {
-      setIsLoadingInvites(true);
-      setIsLoadingMembers(true);
-      setInvitesError(null);
-      setMembersError(null);
+    async (workspaceId: string, options?: { silent?: boolean }) => {
+      const silent = Boolean(options?.silent);
+      if (!silent) {
+        setIsLoadingInvites(true);
+        setIsLoadingMembers(true);
+        setInvitesError(null);
+        setMembersError(null);
+      }
 
       let loadedInvites: WorkspaceInvite[] | undefined;
       try {
         const list = await listWorkspaceInvites(workspaceId);
         loadedInvites = list;
+        invitesRef.current = list;
         setInvites(list);
       } catch (err: any) {
-        setInvitesError(err?.message || 'Unable to load workspace invitations.');
+        if (!silent) {
+          setInvitesError(err?.message || 'Unable to load workspace invitations.');
+        }
       } finally {
-        setIsLoadingInvites(false);
+        if (!silent) {
+          setIsLoadingInvites(false);
+        }
       }
 
       try {
         const memberList = await listWorkspaceMembers(
           workspaceId,
           activeWorkspace?.ownerUserId || user?.id,
-          loadedInvites
+          loadedInvites ?? invitesRef.current
         );
         setMembers(memberList);
+        if (!silent) {
+          setMembersError(null);
+        }
       } catch (err: any) {
-        setMembersError(err?.message || 'Unable to load workspace members.');
+        if (!silent) {
+          setMembersError(err?.message || 'Unable to load workspace members.');
+        }
       } finally {
-        setIsLoadingMembers(false);
+        if (!silent) {
+          setIsLoadingMembers(false);
+        }
+      }
+    },
+    [activeWorkspace?.ownerUserId, user?.id]
+  );
+
+  const refreshWorkspaceMembersSilently = React.useCallback(
+    async (workspaceId: string) => {
+      try {
+        const memberList = await listWorkspaceMembers(
+          workspaceId,
+          activeWorkspace?.ownerUserId || user?.id,
+          invitesRef.current.length > 0 ? invitesRef.current : undefined
+        );
+        setMembers(memberList);
+      } catch {
+        // Keep current list on transient background refresh failures
       }
     },
     [activeWorkspace?.ownerUserId, user?.id]
@@ -140,6 +179,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   React.useEffect(() => {
     if (!activeWorkspace?.id || isTeamMember) {
       setInvites([]);
+      invitesRef.current = [];
       setMembers([]);
       setInvitesError(null);
       setMembersError(null);
@@ -148,6 +188,85 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     }
     void loadWorkspaceInvitesList(activeWorkspace.id);
   }, [activeWorkspace?.id, isTeamMember, loadWorkspaceInvitesList]);
+
+  // Live reflection whenever a workspace member updates their full name (Realtime, cross-tab, focus, and periodic sync)
+  React.useEffect(() => {
+    if (!activeWorkspace?.id || isTeamMember) return;
+    const workspaceId = activeWorkspace.id;
+
+    const applyMemberPatch = (patch: MemberProfileUpdateEvent) => {
+      const nextName = patch.fullName?.trim();
+      if (!nextName) return;
+      const patchEmailLower = patch.email?.trim().toLowerCase() || '';
+
+      setMembers((prev) => {
+        let changed = false;
+        const updated = prev.map((member) => {
+          const idMatch =
+            Boolean(patch.userId) &&
+            (member.userId === patch.userId || member.id === patch.userId);
+          const emailMatch =
+            Boolean(patchEmailLower) &&
+            Boolean(member.email) &&
+            member.email.trim().toLowerCase() === patchEmailLower;
+
+          if (idMatch || emailMatch) {
+            changed = true;
+            return {
+              ...member,
+              userId: member.userId || patch.userId || undefined,
+              name: nextName,
+              avatarUrl: patch.avatarUrl || member.avatarUrl,
+            };
+          }
+          return member;
+        });
+
+        if (!changed) return prev;
+        return updated.sort((a, b) => {
+          const labelA = (a.name || a.email || '').toLowerCase();
+          const labelB = (b.name || b.email || '').toLowerCase();
+          return labelA.localeCompare(labelB);
+        });
+      });
+    };
+
+    const unsubscribe = subscribeToWorkspaceMemberProfileUpdates({
+      workspaceId,
+      onProfilePatch: applyMemberPatch,
+      onRefresh: () => {
+        void refreshWorkspaceMembersSilently(workspaceId);
+      },
+    });
+
+    const handleVisibilityOrFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void refreshWorkspaceMembersSilently(workspaceId);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleVisibilityOrFocus);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    }
+
+    const intervalId = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void refreshWorkspaceMembersSilently(workspaceId);
+    }, 15000);
+
+    return () => {
+      unsubscribe();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      }
+      clearInterval(intervalId);
+    };
+  }, [activeWorkspace?.id, isTeamMember, refreshWorkspaceMembersSilently]);
 
   const hasEnteredValidBusinessName = (rawValue: string) => {
     const trimmed = rawValue.trim();
@@ -186,11 +305,32 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           ...(isTeamMember ? {} : { businessName: businessName.trim() }),
         };
         onUserUpdated(updated);
+
+        // Broadcast updated full name to all workspaces this account belongs to so owners see it immediately
+        const targetWorkspaceIds = Array.from(
+          new Set(
+            [
+              ...(workspaces || []).map((w) => w.id),
+              activeWorkspace?.id || '',
+            ].filter(Boolean)
+          )
+        );
+        if (updated?.id && updated?.name) {
+          void broadcastMemberProfileUpdate({
+            userId: updated.id,
+            fullName: updated.name,
+            email: updated.email || user?.email,
+            avatarUrl: updated.avatarUrl,
+            workspaceIds: targetWorkspaceIds,
+          });
+        }
+
         toast.success('Profile details saved successfully', {
           icon: <CheckCircle2 className="size-4 text-emerald-500" />,
         });
       } else {
-        toast.error('Failed to update profile');
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData?.error || 'Failed to update profile');
       }
     } catch {
       toast.error('An error occurred while saving your profile');
@@ -600,7 +740,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               )}
             </div>
 
-            {(isTeamMember || workspaces.length > 1) && workspaces.length > 0 && onSwitchWorkspace && (
+            {workspaces.length > 0 && onSwitchWorkspace && (
               <div className="space-y-1.5">
                 <label
                   htmlFor="profile-workspace-selector"
@@ -616,13 +756,26 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                     onChange={(e) => onSwitchWorkspace(e.target.value)}
                     className="w-full rounded-xl border border-input bg-card pl-8 pr-3 py-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-2xs cursor-pointer"
                   >
-                    {workspaces.map((ws) => (
-                      <option key={ws.id} value={ws.id}>
-                        {ws.name}
-                      </option>
-                    ))}
+                    {workspaces.map((ws) => {
+                      const roleLabel =
+                        ws.role === 'owner'
+                          ? 'Owner'
+                          : ws.role === 'admin'
+                          ? 'Admin'
+                          : 'Member';
+                      return (
+                        <option key={ws.id} value={ws.id}>
+                          {ws.name} ({roleLabel})
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
+                {workspaces.length > 1 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Switch between your owned, admin, and member workspaces linked to this email.
+                  </p>
+                )}
               </div>
             )}
 

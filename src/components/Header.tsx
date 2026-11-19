@@ -216,11 +216,19 @@ export const Header: React.FC<HeaderProps> = ({
                       onChange={(e) => onSwitchWorkspace(e.target.value)}
                       className="h-8 max-w-[175px] rounded-xl border border-border bg-card pl-7 pr-2.5 text-xs font-medium text-foreground hover:bg-accent focus:outline-hidden focus:ring-2 focus:ring-primary/40 transition-colors shadow-2xs cursor-pointer truncate"
                     >
-                      {workspaces.map((ws) => (
-                        <option key={ws.id} value={ws.id}>
-                          {ws.name}
-                        </option>
-                      ))}
+                      {workspaces.map((ws) => {
+                        const roleLabel =
+                          ws.role === 'owner'
+                            ? 'Owner'
+                            : ws.role === 'admin'
+                            ? 'Admin'
+                            : 'Member';
+                        return (
+                          <option key={ws.id} value={ws.id}>
+                            {ws.name} ({roleLabel})
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 )}
@@ -327,11 +335,19 @@ export const Header: React.FC<HeaderProps> = ({
                       }}
                       className="w-full h-9 rounded-xl border border-border bg-card pl-8 pr-3 text-xs font-medium text-foreground focus:outline-hidden focus:ring-2 focus:ring-primary/40"
                     >
-                      {workspaces.map((ws) => (
-                        <option key={ws.id} value={ws.id}>
-                          {ws.name}
-                        </option>
-                      ))}
+                      {workspaces.map((ws) => {
+                        const roleLabel =
+                          ws.role === 'owner'
+                            ? 'Owner'
+                            : ws.role === 'admin'
+                            ? 'Admin'
+                            : 'Member';
+                        return (
+                          <option key={ws.id} value={ws.id}>
+                            {ws.name} ({roleLabel})
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>

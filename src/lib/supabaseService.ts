@@ -362,10 +362,15 @@ export async function getUserWorkspaceMemberships(
     }
   }
 
-  // Sort owned workspaces first, then joined workspaces
+  // Sort owned workspaces first, then admin, then joined member workspaces
+  const roleRank = (role: WorkspaceRole): number => {
+    if (role === 'owner') return 0;
+    if (role === 'admin') return 1;
+    return 2;
+  };
   return Array.from(byId.values()).sort((a, b) => {
-    if (a.role === 'owner' && b.role !== 'owner') return -1;
-    if (a.role !== 'owner' && b.role === 'owner') return 1;
+    const rankDiff = roleRank(a.role) - roleRank(b.role);
+    if (rankDiff !== 0) return rankDiff;
     return a.name.localeCompare(b.name);
   });
 }
@@ -753,14 +758,33 @@ export async function getSupabaseProfile(userId?: string): Promise<User | null> 
     }
 
     if (data) {
+      const mapped = mapSupabaseProfileToUser(data, authUser);
+      // Backfill full_name or email on profiles if a DB trigger created an incomplete row
+      if (authUser && authUser.id === targetId) {
+        const patch: Record<string, any> = {};
+        if ((!data.full_name || !String(data.full_name).trim()) && mapped.name) {
+          patch.full_name = mapped.name;
+        }
+        if ((!data.email || !String(data.email).trim()) && mapped.email) {
+          patch.email = mapped.email;
+        }
+        if (Object.keys(patch).length > 0) {
+          patch.updated_at = new Date().toISOString();
+          void supabase
+            .from('profiles')
+            .update(patch)
+            .eq('id', targetId)
+            .then(() => {});
+        }
+      }
       // Ensure workspace is also ready in the background
       getOrCreateUserWorkspace(
         targetId,
         data.email || authUser?.email,
-        data.full_name,
+        mapped.name,
         data.business_name
       ).catch(() => {});
-      return mapSupabaseProfileToUser(data, authUser);
+      return mapped;
     }
 
     // If the user is authenticated in Supabase Auth but has no row in `profiles` yet, create it now!
@@ -811,24 +835,109 @@ export async function updateSupabaseProfile(userId: string, updates: Partial<Use
 
   const { data: sessionData } = await supabase.auth.getSession();
   const authUser = sessionData?.session?.user;
+  const resolvedEmail = updates.email || authUser?.email || '';
+  const trimmedName = typeof updates.name === 'string' ? updates.name.trim() : undefined;
 
-  const payload: Record<string, any> = {
-    id: userId,
-    email: updates.email || authUser?.email || '',
+  const updateFields: Record<string, any> = {
     updated_at: new Date().toISOString(),
   };
+  if (trimmedName !== undefined) updateFields.full_name = trimmedName;
+  if (updates.businessName !== undefined) updateFields.business_name = updates.businessName;
+  if (typeof updates.avatarUrl === 'string' && updates.avatarUrl.trim()) {
+    updateFields.avatar_url = updates.avatarUrl.trim();
+  }
+  if (resolvedEmail) {
+    updateFields.email = resolvedEmail;
+  }
 
-  if (updates.name !== undefined) payload.full_name = updates.name;
-  if (updates.businessName !== undefined) payload.business_name = updates.businessName;
-  if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
+  let savedRow: any = null;
+  let lastError: any = null;
 
-  const { data, error } = await supabase
+  // 1. Try updating existing profile row first
+  const { data: updatedRow, error: updateErr } = await supabase
     .from('profiles')
-    .upsert(payload, { onConflict: 'id' })
+    .update(updateFields)
+    .eq('id', userId)
     .select('*')
     .maybeSingle();
 
-  if (error) throw error;
+  if (!updateErr && updatedRow) {
+    savedRow = updatedRow;
+  } else {
+    lastError = updateErr;
+
+    // 2. Fallback to upsert in case the profile row doesn't exist yet
+    const upsertPayload: Record<string, any> = {
+      id: userId,
+      ...updateFields,
+    };
+    const { data: upsertedRow, error: upsertErr } = await supabase
+      .from('profiles')
+      .upsert(upsertPayload, { onConflict: 'id' })
+      .select('*')
+      .maybeSingle();
+
+    if (!upsertErr && upsertedRow) {
+      savedRow = upsertedRow;
+      lastError = null;
+    } else {
+      lastError = upsertErr || updateErr;
+
+      // 3. Final resilient fallback with minimal core columns (e.g. if optional column like avatar_url/email doesn't exist)
+      if (trimmedName !== undefined) {
+        const minimalPayload: Record<string, any> = {
+          full_name: trimmedName,
+          updated_at: new Date().toISOString(),
+        };
+        if (updates.businessName !== undefined) {
+          minimalPayload.business_name = updates.businessName;
+        }
+        const { data: minRow, error: minErr } = await supabase
+          .from('profiles')
+          .update(minimalPayload)
+          .eq('id', userId)
+          .select('*')
+          .maybeSingle();
+
+        if (!minErr && minRow) {
+          savedRow = minRow;
+          lastError = null;
+        } else {
+          const { data: minUpsertRow, error: minUpsertErr } = await supabase
+            .from('profiles')
+            .upsert({ id: userId, ...minimalPayload }, { onConflict: 'id' })
+            .select('*')
+            .maybeSingle();
+
+          if (!minUpsertErr && minUpsertRow) {
+            savedRow = minUpsertRow;
+            lastError = null;
+          } else {
+            lastError = minUpsertErr || minErr || lastError;
+          }
+        }
+      }
+    }
+  }
+
+  if (lastError && !savedRow) {
+    throw lastError;
+  }
+
+  // Keep Supabase Auth user_metadata in sync so full_name is consistent everywhere
+  if (trimmedName && authUser?.id === userId) {
+    try {
+      await supabase.auth.updateUser({
+        data: {
+          ...(authUser.user_metadata || {}),
+          full_name: trimmedName,
+          name: trimmedName,
+        },
+      });
+    } catch (metaErr) {
+      console.warn('[Zivofly] Auth metadata full_name sync warning:', metaErr);
+    }
+  }
 
   const trimmedBiz =
     typeof updates.businessName === 'string' ? updates.businessName.trim() : '';
@@ -843,7 +952,7 @@ export async function updateSupabaseProfile(userId: string, updates: Partial<Use
     }
   }
 
-  return data ? mapSupabaseProfileToUser(data, authUser) : null;
+  return savedRow ? mapSupabaseProfileToUser(savedRow, authUser) : null;
 }
 
 export async function deleteSupabaseAccount(): Promise<void> {
@@ -5781,12 +5890,38 @@ function normalizeWorkspaceInviteRow(row: any): WorkspaceInvite | null {
   const email = String(row.email || row.invited_email || '').trim();
   if (!id && !email) return null;
 
+  const nestedProfile = Array.isArray(row.profile)
+    ? row.profile[0]
+    : row.profile || (Array.isArray(row.user) ? row.user[0] : row.user) || null;
+  const resolvedUserId = String(
+    row.accepted_by_user_id ||
+      row.accepted_by ||
+      row.member_user_id ||
+      row.user_id ||
+      nestedProfile?.id ||
+      ''
+  ).trim();
+  const resolvedFullName = String(
+    row.full_name ||
+      row.member_name ||
+      row.name ||
+      nestedProfile?.full_name ||
+      nestedProfile?.name ||
+      ''
+  ).trim();
+  const resolvedAvatarUrl = String(
+    row.avatar_url || nestedProfile?.avatar_url || ''
+  ).trim();
+
   return {
     id: id || email,
     workspace_id: row.workspace_id || undefined,
     email,
     status: String(row.status || 'pending').toLowerCase(),
     role: row.role || row.member_role || 'member',
+    user_id: resolvedUserId || undefined,
+    full_name: resolvedFullName || undefined,
+    avatar_url: resolvedAvatarUrl || undefined,
     created_at: row.created_at || undefined,
     expires_at: row.expires_at || undefined,
     accepted_at: row.accepted_at ?? null,
@@ -6082,6 +6217,139 @@ export async function acceptWorkspaceInvite(
   };
 }
 
+interface ProfileRowSummary {
+  id: string;
+  full_name?: string | null;
+  email?: string | null;
+  avatar_url?: string | null;
+}
+
+function mergeProfileSummary(
+  target: Map<string, ProfileRowSummary>,
+  row: any
+): void {
+  if (!row || !row.id) return;
+  const id = String(row.id);
+  const existing = target.get(id);
+  target.set(id, {
+    id,
+    full_name:
+      (typeof row.full_name === 'string' && row.full_name.trim()) ||
+      existing?.full_name ||
+      null,
+    email:
+      (typeof row.email === 'string' && row.email.trim()) ||
+      existing?.email ||
+      null,
+    avatar_url:
+      (typeof row.avatar_url === 'string' && row.avatar_url.trim()) ||
+      existing?.avatar_url ||
+      null,
+  });
+}
+
+async function fetchProfilesByUserIds(
+  userIds: string[]
+): Promise<ProfileRowSummary[]> {
+  if (!supabase || userIds.length === 0) return [];
+  const columnSets = [
+    'id, full_name, email, avatar_url',
+    'id, full_name, email',
+    'id, full_name',
+  ];
+  for (const cols of columnSets) {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(cols)
+        .in('id', userIds);
+      if (!error && Array.isArray(data)) {
+        return data as unknown as ProfileRowSummary[];
+      }
+    } catch {
+      // try next column subset
+    }
+  }
+  return [];
+}
+
+async function fetchProfilesByEmails(
+  emails: string[]
+): Promise<ProfileRowSummary[]> {
+  if (!supabase || emails.length === 0) return [];
+  const uniqueVariants = Array.from(
+    new Set(
+      emails
+        .flatMap((e) => {
+          const trimmed = e.trim();
+          return trimmed ? [trimmed, trimmed.toLowerCase()] : [];
+        })
+        .filter(Boolean)
+    )
+  );
+  if (uniqueVariants.length === 0) return [];
+
+  const results: ProfileRowSummary[] = [];
+  const foundEmailSet = new Set<string>();
+  const columnSets = [
+    'id, full_name, email, avatar_url',
+    'id, full_name, email',
+  ];
+
+  for (const cols of columnSets) {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(cols)
+        .in('email', uniqueVariants);
+      if (!error && Array.isArray(data)) {
+        for (const p of data as unknown as ProfileRowSummary[]) {
+          results.push(p);
+          if (typeof p.email === 'string' && p.email.trim()) {
+            foundEmailSet.add(p.email.trim().toLowerCase());
+          }
+        }
+        break;
+      }
+    } catch {
+      // try next column subset
+    }
+  }
+
+  // Case-insensitive fallback for any remaining emails not matched by exact `.in()`
+  const missingEmails = Array.from(
+    new Set(
+      emails
+        .map((e) => e.trim())
+        .filter((e) => e && !foundEmailSet.has(e.toLowerCase()))
+    )
+  );
+
+  if (missingEmails.length > 0 && missingEmails.length <= 20) {
+    await Promise.all(
+      missingEmails.map(async (email) => {
+        for (const cols of columnSets) {
+          try {
+            const { data, error } = await supabase!
+              .from('profiles')
+              .select(cols)
+              .ilike('email', email)
+              .limit(1);
+            if (!error && Array.isArray(data) && data.length > 0) {
+              results.push(data[0] as unknown as ProfileRowSummary);
+              return;
+            }
+          } catch {
+            // continue
+          }
+        }
+      })
+    );
+  }
+
+  return results;
+}
+
 export async function listWorkspaceMembers(
   workspaceId: string,
   ownerUserId?: string,
@@ -6096,20 +6364,30 @@ export async function listWorkspaceMembers(
 
   let memberRows: any[] = [];
   try {
-    const { data, error } = await supabase
+    // First try selecting workspace_members with embedded profiles join if FK exists
+    const { data: joinedData, error: joinedErr } = await supabase
       .from('workspace_members')
-      .select('workspace_id, user_id, member_role, created_at')
+      .select('workspace_id, user_id, member_role, created_at, profiles(id, full_name, email, avatar_url)')
       .eq('workspace_id', workspaceId);
 
-    if (!error && Array.isArray(data)) {
-      memberRows = data;
+    if (!joinedErr && Array.isArray(joinedData)) {
+      memberRows = joinedData;
     } else {
-      const { data: fallbackData } = await supabase
+      const { data, error } = await supabase
         .from('workspace_members')
-        .select('workspace_id, user_id, member_role')
+        .select('workspace_id, user_id, member_role, created_at')
         .eq('workspace_id', workspaceId);
-      if (Array.isArray(fallbackData)) {
-        memberRows = fallbackData;
+
+      if (!error && Array.isArray(data)) {
+        memberRows = data;
+      } else {
+        const { data: fallbackData } = await supabase
+          .from('workspace_members')
+          .select('workspace_id, user_id, member_role')
+          .eq('workspace_id', workspaceId);
+        if (Array.isArray(fallbackData)) {
+          memberRows = fallbackData;
+        }
       }
     }
   } catch {
@@ -6121,39 +6399,6 @@ export async function listWorkspaceMembers(
     if (ownerUserId && row.user_id === ownerUserId) return false;
     return normalizeWorkspaceRole(row.member_role, false) !== 'owner';
   });
-
-  const profileMap = new Map<
-    string,
-    { id: string; full_name?: string; email?: string; avatar_url?: string }
-  >();
-  const userIds = Array.from(
-    new Set(nonOwnerRows.map((r) => String(r.user_id)).filter(Boolean))
-  );
-
-  if (userIds.length > 0) {
-    try {
-      const { data: profileRows, error: profErr } = await supabase
-        .from('profiles')
-        .select('id, full_name, email, avatar_url')
-        .in('id', userIds);
-
-      if (!profErr && Array.isArray(profileRows)) {
-        for (const p of profileRows) {
-          if (p?.id) profileMap.set(p.id, p);
-        }
-      } else {
-        const { data: fallbackProfiles } = await supabase
-          .from('profiles')
-          .select('id, full_name, email')
-          .in('id', userIds);
-        for (const p of fallbackProfiles || []) {
-          if (p?.id) profileMap.set(p.id, p);
-        }
-      }
-    } catch {
-      // Ignore if RLS restricts reading other member profiles
-    }
-  }
 
   let invitesSource = existingInvites;
   if (!invitesSource) {
@@ -6168,27 +6413,101 @@ export async function listWorkspaceMembers(
     (inv) => String(inv.status || '').toLowerCase() === 'accepted' && Boolean(inv.email?.trim())
   );
 
+  const profileMap = new Map<string, ProfileRowSummary>();
+  const profileByEmailMap = new Map<string, ProfileRowSummary>();
+
+  // Harvest any embedded profiles returned by the PostgREST join
+  for (const row of nonOwnerRows) {
+    const embedded = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+    if (embedded && (embedded.id || row.user_id)) {
+      mergeProfileSummary(profileMap, { ...embedded, id: embedded.id || row.user_id });
+    }
+  }
+
+  // Collect all known user IDs from workspace_members and accepted invites
+  const userIds = Array.from(
+    new Set(
+      [
+        ...nonOwnerRows.map((r) => String(r.user_id || '')),
+        ...acceptedInvites.map((inv) => String(inv.user_id || '')),
+      ].filter((id) => isValidUuid(id))
+    )
+  );
+
+  if (userIds.length > 0) {
+    const fetchedById = await fetchProfilesByUserIds(userIds);
+    for (const p of fetchedById) {
+      mergeProfileSummary(profileMap, p);
+    }
+  }
+
+  for (const prof of profileMap.values()) {
+    if (typeof prof.email === 'string' && prof.email.trim()) {
+      profileByEmailMap.set(prof.email.trim().toLowerCase(), prof);
+    }
+  }
+
+  // Also query profiles by accepted invite emails so full_name resolves even if workspace_members RLS hides rows
+  const emailsNeedingProfile = acceptedInvites
+    .map((inv) => inv.email.trim())
+    .filter((email) => {
+      const existing = profileByEmailMap.get(email.toLowerCase());
+      return !existing || !existing.full_name;
+    });
+
+  if (emailsNeedingProfile.length > 0) {
+    const fetchedByEmail = await fetchProfilesByEmails(emailsNeedingProfile);
+    for (const p of fetchedByEmail) {
+      mergeProfileSummary(profileMap, p);
+      if (typeof p.email === 'string' && p.email.trim()) {
+        profileByEmailMap.set(p.email.trim().toLowerCase(), profileMap.get(String(p.id)) || p);
+      }
+    }
+  }
+
+  // Index accepted invites by user_id (if available) for direct matching
+  const inviteByUserId = new Map<string, WorkspaceInvite>();
+  for (const inv of acceptedInvites) {
+    if (inv.user_id) {
+      inviteByUserId.set(inv.user_id, inv);
+    }
+  }
+
   const members: WorkspaceMember[] = [];
+  const seenUserIds = new Set<string>();
   const seenEmails = new Set<string>();
   const unresolvedMemberRows: any[] = [];
 
   for (const row of nonOwnerRows) {
-    const prof = profileMap.get(row.user_id);
-    const email = typeof prof?.email === 'string' ? prof.email.trim() : '';
+    const userId = String(row.user_id);
+    const prof = profileMap.get(userId);
+    const directInvite = inviteByUserId.get(userId);
+    const email =
+      (typeof prof?.email === 'string' && prof.email.trim()) ||
+      (directInvite?.email?.trim() || '');
+    const fullName =
+      (typeof prof?.full_name === 'string' && prof.full_name.trim()) ||
+      (typeof directInvite?.full_name === 'string' && directInvite.full_name.trim()) ||
+      undefined;
+    const avatarUrl =
+      (typeof prof?.avatar_url === 'string' && prof.avatar_url.trim()) ||
+      (typeof directInvite?.avatar_url === 'string' && directInvite.avatar_url.trim()) ||
+      undefined;
     const role = normalizeWorkspaceRole(row.member_role, false);
-    const joinedAt = row.created_at || null;
+    const joinedAt = row.created_at || directInvite?.accepted_at || null;
 
     if (email) {
       const emailKey = email.toLowerCase();
-      if (seenEmails.has(emailKey)) continue;
+      if (seenEmails.has(emailKey) || seenUserIds.has(userId)) continue;
       seenEmails.add(emailKey);
+      seenUserIds.add(userId);
       members.push({
-        id: String(row.user_id),
-        userId: String(row.user_id),
-        name: typeof prof?.full_name === 'string' && prof.full_name.trim() ? prof.full_name.trim() : undefined,
+        id: userId,
+        userId,
+        name: fullName,
         email,
         role,
-        avatarUrl: typeof prof?.avatar_url === 'string' && prof.avatar_url.trim() ? prof.avatar_url.trim() : undefined,
+        avatarUrl,
         joinedAt,
       });
     } else {
@@ -6196,9 +6515,15 @@ export async function listWorkspaceMembers(
     }
   }
 
-  const unmatchedAcceptedInvites = acceptedInvites.filter(
-    (inv) => !seenEmails.has(inv.email.trim().toLowerCase())
-  );
+  const unmatchedAcceptedInvites = acceptedInvites.filter((inv) => {
+    const emailKey = inv.email.trim().toLowerCase();
+    if (seenEmails.has(emailKey)) return false;
+    if (inv.user_id && seenUserIds.has(inv.user_id)) return false;
+    return true;
+  });
+
+  // Pair any remaining unresolvedMemberRows with unmatchedAcceptedInvites by closest join timestamp when counts allow
+  const remainingUnresolved = [...unresolvedMemberRows];
 
   for (const inv of unmatchedAcceptedInvites) {
     const email = inv.email.trim();
@@ -6206,52 +6531,101 @@ export async function listWorkspaceMembers(
     if (seenEmails.has(emailKey)) continue;
     seenEmails.add(emailKey);
 
-    const matchedRow =
-      unresolvedMemberRows.length === 1 && unmatchedAcceptedInvites.length === 1
-        ? unresolvedMemberRows[0]
-        : null;
-    const matchedProf = matchedRow ? profileMap.get(matchedRow.user_id) : undefined;
+    let matchedRow: any = null;
+    if (inv.user_id) {
+      const idx = remainingUnresolved.findIndex((r) => String(r.user_id) === inv.user_id);
+      if (idx !== -1) {
+        matchedRow = remainingUnresolved.splice(idx, 1)[0];
+      }
+    }
+
+    const emailMatchedProf = profileByEmailMap.get(emailKey);
+    if (!matchedRow && emailMatchedProf?.id) {
+      const idx = remainingUnresolved.findIndex(
+        (r) => String(r.user_id) === String(emailMatchedProf.id)
+      );
+      if (idx !== -1) {
+        matchedRow = remainingUnresolved.splice(idx, 1)[0];
+      }
+    }
+
+    if (!matchedRow && remainingUnresolved.length > 0) {
+      if (remainingUnresolved.length === 1 && unmatchedAcceptedInvites.length === 1) {
+        matchedRow = remainingUnresolved.splice(0, 1)[0];
+      } else if (inv.accepted_at) {
+        const invTime = new Date(inv.accepted_at).getTime();
+        if (!Number.isNaN(invTime)) {
+          let bestIdx = -1;
+          let bestDiff = Infinity;
+          remainingUnresolved.forEach((r, idx) => {
+            if (!r.created_at) return;
+            const rowTime = new Date(r.created_at).getTime();
+            if (Number.isNaN(rowTime)) return;
+            const diff = Math.abs(rowTime - invTime);
+            if (diff < bestDiff && diff <= 5 * 60 * 1000) {
+              bestDiff = diff;
+              bestIdx = idx;
+            }
+          });
+          if (bestIdx !== -1) {
+            matchedRow = remainingUnresolved.splice(bestIdx, 1)[0];
+          }
+        }
+      }
+    }
+
+    const resolvedUserId =
+      (matchedRow?.user_id && String(matchedRow.user_id)) ||
+      (emailMatchedProf?.id && String(emailMatchedProf.id)) ||
+      inv.user_id ||
+      undefined;
+    if (resolvedUserId) {
+      seenUserIds.add(resolvedUserId);
+    }
+
+    const matchedProf =
+      (resolvedUserId ? profileMap.get(resolvedUserId) : undefined) || emailMatchedProf;
+
+    const fullName =
+      (typeof matchedProf?.full_name === 'string' && matchedProf.full_name.trim()) ||
+      (typeof inv.full_name === 'string' && inv.full_name.trim()) ||
+      undefined;
+    const avatarUrl =
+      (typeof matchedProf?.avatar_url === 'string' && matchedProf.avatar_url.trim()) ||
+      (typeof inv.avatar_url === 'string' && inv.avatar_url.trim()) ||
+      undefined;
 
     members.push({
-      id: matchedRow?.user_id || inv.id || emailKey,
-      userId: matchedRow?.user_id || undefined,
-      name:
-        typeof matchedProf?.full_name === 'string' && matchedProf.full_name.trim()
-          ? matchedProf.full_name.trim()
-          : undefined,
+      id: resolvedUserId || inv.id || emailKey,
+      userId: resolvedUserId,
+      name: fullName,
       email,
       role: normalizeWorkspaceRole(matchedRow?.member_role || inv.role, false),
-      avatarUrl:
-        typeof matchedProf?.avatar_url === 'string' && matchedProf.avatar_url.trim()
-          ? matchedProf.avatar_url.trim()
-          : undefined,
+      avatarUrl,
       joinedAt: inv.accepted_at || matchedRow?.created_at || inv.created_at || null,
     });
   }
 
-  if (unresolvedMemberRows.length > unmatchedAcceptedInvites.length) {
-    const remainingCount = unresolvedMemberRows.length - unmatchedAcceptedInvites.length;
-    const extraRows = unresolvedMemberRows.slice(
-      unresolvedMemberRows.length - remainingCount
-    );
-    for (const row of extraRows) {
-      const prof = profileMap.get(row.user_id);
-      members.push({
-        id: String(row.user_id),
-        userId: String(row.user_id),
-        name:
-          typeof prof?.full_name === 'string' && prof.full_name.trim()
-            ? prof.full_name.trim()
-            : 'Workspace Member',
-        email: '',
-        role: normalizeWorkspaceRole(row.member_role, false),
-        avatarUrl:
-          typeof prof?.avatar_url === 'string' && prof.avatar_url.trim()
-            ? prof.avatar_url.trim()
-            : undefined,
-        joinedAt: row.created_at || null,
-      });
-    }
+  for (const row of remainingUnresolved) {
+    const userId = String(row.user_id);
+    if (seenUserIds.has(userId)) continue;
+    seenUserIds.add(userId);
+    const prof = profileMap.get(userId);
+    members.push({
+      id: userId,
+      userId,
+      name:
+        typeof prof?.full_name === 'string' && prof.full_name.trim()
+          ? prof.full_name.trim()
+          : 'Workspace Member',
+      email: typeof prof?.email === 'string' && prof.email.trim() ? prof.email.trim() : '',
+      role: normalizeWorkspaceRole(row.member_role, false),
+      avatarUrl:
+        typeof prof?.avatar_url === 'string' && prof.avatar_url.trim()
+          ? prof.avatar_url.trim()
+          : undefined,
+      joinedAt: row.created_at || null,
+    });
   }
 
   return members.sort((a, b) => {
@@ -6260,4 +6634,237 @@ export async function listWorkspaceMembers(
     return labelA.localeCompare(labelB);
   });
 }
+
+export interface MemberProfileUpdateEvent {
+  userId: string;
+  fullName: string;
+  email?: string;
+  avatarUrl?: string;
+  updatedAt: number;
+}
+
+const MEMBER_PROFILE_SYNC_STORAGE_KEY = 'zivofly_member_profile_updated_v1';
+const MEMBER_PROFILE_BROADCAST_NAME = 'zivofly_member_profile_sync';
+
+export async function broadcastMemberProfileUpdate(params: {
+  userId: string;
+  fullName: string;
+  email?: string;
+  avatarUrl?: string;
+  workspaceIds?: string[];
+}): Promise<void> {
+  const trimmedName = params.fullName.trim();
+  if (!params.userId || !trimmedName) return;
+
+  const eventPayload: MemberProfileUpdateEvent = {
+    userId: params.userId,
+    fullName: trimmedName,
+    email: params.email?.trim() || undefined,
+    avatarUrl: params.avatarUrl?.trim() || undefined,
+    updatedAt: Date.now(),
+  };
+
+  // 1. Same-browser multi-tab notifications (BroadcastChannel + localStorage event)
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(
+        MEMBER_PROFILE_SYNC_STORAGE_KEY,
+        JSON.stringify(eventPayload)
+      );
+    } catch {
+      // ignore storage errors
+    }
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel(MEMBER_PROFILE_BROADCAST_NAME);
+        bc.postMessage(eventPayload);
+        bc.close();
+      }
+    } catch {
+      // ignore BroadcastChannel errors
+    }
+  }
+
+  // 2. Cross-device live sync via Supabase Realtime Broadcast for each workspace this user belongs to
+  if (!supabase) return;
+  const targetWorkspaceIds = Array.from(
+    new Set((params.workspaceIds || []).filter((id) => isValidUuid(id)))
+  );
+  if (targetWorkspaceIds.length === 0) return;
+
+  await Promise.all(
+    targetWorkspaceIds.map(
+      (wsId) =>
+        new Promise<void>((resolve) => {
+          try {
+            const channel = supabase!.channel(`workspace_members_sync:${wsId}`);
+            let settled = false;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              try {
+                void supabase!.removeChannel(channel);
+              } catch {
+                // ignore
+              }
+              resolve();
+            };
+
+            const timeout = setTimeout(finish, 3000);
+            channel.subscribe((status) => {
+              if (status === 'SUBSCRIBED') {
+                void channel
+                  .send({
+                    type: 'broadcast',
+                    event: 'member_profile_updated',
+                    payload: eventPayload,
+                  })
+                  .finally(() => {
+                    clearTimeout(timeout);
+                    setTimeout(finish, 150);
+                  });
+              } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                clearTimeout(timeout);
+                finish();
+              }
+            });
+          } catch {
+            resolve();
+          }
+        })
+    )
+  );
+}
+
+export function subscribeToWorkspaceMemberProfileUpdates(params: {
+  workspaceId: string;
+  onProfilePatch: (patch: MemberProfileUpdateEvent) => void;
+  onRefresh: () => void;
+}): () => void {
+  const { workspaceId, onProfilePatch, onRefresh } = params;
+  const cleanups: Array<() => void> = [];
+
+  // 1. Supabase Realtime: Broadcast + Postgres Changes on profiles & workspace_members
+  if (supabase && isValidUuid(workspaceId)) {
+    const channel = supabase
+      .channel(`workspace_members_sync:${workspaceId}`)
+      .on('broadcast', { event: 'member_profile_updated' }, (msg: any) => {
+        const payload = msg?.payload;
+        if (payload && typeof payload.fullName === 'string' && payload.fullName.trim()) {
+          onProfilePatch({
+            userId: String(payload.userId || ''),
+            fullName: payload.fullName.trim(),
+            email: typeof payload.email === 'string' ? payload.email.trim() : undefined,
+            avatarUrl:
+              typeof payload.avatarUrl === 'string' ? payload.avatarUrl.trim() : undefined,
+            updatedAt: Number(payload.updatedAt) || Date.now(),
+          });
+        }
+        onRefresh();
+      })
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'profiles',
+        },
+        (payload: any) => {
+          const nextRow = payload?.new;
+          if (nextRow && typeof nextRow.full_name === 'string' && nextRow.full_name.trim()) {
+            onProfilePatch({
+              userId: String(nextRow.id || ''),
+              fullName: nextRow.full_name.trim(),
+              email: typeof nextRow.email === 'string' ? nextRow.email.trim() : undefined,
+              avatarUrl:
+                typeof nextRow.avatar_url === 'string' ? nextRow.avatar_url.trim() : undefined,
+              updatedAt: Date.now(),
+            });
+          }
+          onRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'workspace_members',
+          filter: `workspace_id=eq.${workspaceId}`,
+        },
+        () => {
+          onRefresh();
+        }
+      )
+      .subscribe();
+
+    cleanups.push(() => {
+      try {
+        void supabase!.removeChannel(channel);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  // 2. Browser BroadcastChannel (instant same-browser multi-tab reflection)
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const bc = new BroadcastChannel(MEMBER_PROFILE_BROADCAST_NAME);
+      bc.onmessage = (event) => {
+        const data = event?.data;
+        if (data && typeof data.fullName === 'string' && data.fullName.trim()) {
+          onProfilePatch({
+            userId: String(data.userId || ''),
+            fullName: data.fullName.trim(),
+            email: typeof data.email === 'string' ? data.email.trim() : undefined,
+            avatarUrl:
+              typeof data.avatarUrl === 'string' ? data.avatarUrl.trim() : undefined,
+            updatedAt: Number(data.updatedAt) || Date.now(),
+          });
+          onRefresh();
+        }
+      };
+      cleanups.push(() => {
+        try {
+          bc.close();
+        } catch {
+          // ignore
+        }
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Storage event fallback (same-browser multi-tab)
+  if (typeof window !== 'undefined') {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key !== MEMBER_PROFILE_SYNC_STORAGE_KEY || !e.newValue) return;
+      try {
+        const data = JSON.parse(e.newValue);
+        if (data && typeof data.fullName === 'string' && data.fullName.trim()) {
+          onProfilePatch({
+            userId: String(data.userId || ''),
+            fullName: data.fullName.trim(),
+            email: typeof data.email === 'string' ? data.email.trim() : undefined,
+            avatarUrl:
+              typeof data.avatarUrl === 'string' ? data.avatarUrl.trim() : undefined,
+            updatedAt: Number(data.updatedAt) || Date.now(),
+          });
+          onRefresh();
+        }
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    cleanups.push(() => window.removeEventListener('storage', handleStorage));
+  }
+
+  return () => {
+    cleanups.forEach((fn) => fn());
+  };
+}
+
 

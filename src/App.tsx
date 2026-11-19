@@ -343,6 +343,22 @@ function AppContent() {
     }
   }, [isLoading, currentPath, user, agents]);
 
+  // Refresh workspace memberships whenever opening Profile so newly joined/owned workspaces appear in Active Workspace
+  useEffect(() => {
+    if (!supabase || isLoading || !user?.id || currentPath !== '/profile') return;
+    let cancelled = false;
+    void getUserWorkspaceMemberships(user.id)
+      .then((memberships) => {
+        if (!cancelled && memberships.length > 0) {
+          setWorkspaces(memberships);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath, user?.id, isLoading]);
+
   const handleSwitchWorkspace = async (workspaceId: string) => {
     if (!workspaceId || workspaceId === activeWorkspace?.id) return;
     const target = workspaces.find((w) => w.id === workspaceId);

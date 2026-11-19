@@ -23,6 +23,9 @@ export interface WorkspaceInvite {
   email: string;
   status: WorkspaceInviteStatus;
   role?: string;
+  user_id?: string;
+  full_name?: string;
+  avatar_url?: string;
   created_at?: string;
   expires_at?: string;
   accepted_at?: string | null;

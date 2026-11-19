@@ -347,6 +347,22 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
         }
       }
 
+      const supabasePatch: Partial<User> = {};
+      if (typeof incomingBody.name === 'string') {
+        supabasePatch.name = incomingBody.name.trim();
+      }
+      if (typeof incomingBody.businessName === 'string') {
+        supabasePatch.businessName = incomingBody.businessName.trim();
+      }
+      if (typeof incomingBody.avatarUrl === 'string' && incomingBody.avatarUrl.trim()) {
+        supabasePatch.avatarUrl = incomingBody.avatarUrl.trim();
+      }
+      if (typeof incomingBody.email === 'string' && incomingBody.email.trim()) {
+        supabasePatch.email = incomingBody.email.trim();
+      } else if (currentUser?.email) {
+        supabasePatch.email = currentUser.email;
+      }
+
       let updatedUser: User = {
         ...(currentUser || { id: userId, email: '', name: '', businessName: '' }),
         ...incomingBody,
@@ -354,10 +370,14 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 
       if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
         try {
-          const supaUpdated = await updateSupabaseProfile(userId, updatedUser);
+          const supaUpdated = await updateSupabaseProfile(userId, supabasePatch);
           if (supaUpdated) updatedUser = supaUpdated;
-        } catch (e) {
+        } catch (e: any) {
           console.warn('[Zivofly] Supabase profile update error:', e);
+          return jsonResponse(
+            { error: e?.message || 'Failed to save profile changes to database.' },
+            500
+          );
         }
       }
 
