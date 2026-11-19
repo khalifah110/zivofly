@@ -29,6 +29,16 @@ export interface WorkspaceInvite {
   revoked_at?: string | null;
 }
 
+export interface WorkspaceMember {
+  id: string;
+  userId?: string;
+  name?: string;
+  email: string;
+  role: WorkspaceRole;
+  avatarUrl?: string;
+  joinedAt?: string | null;
+}
+
 export interface User {
   id: string;
   name: string;

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  User as UserIcon,
   Mail,
   Trash2,
   Save,
@@ -17,12 +16,21 @@ import {
   Ban,
   Loader2,
   Inbox,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { User, Agent, ChannelConnection, WorkspaceMembership, WorkspaceInvite } from '../types';
+import {
+  User,
+  Agent,
+  ChannelConnection,
+  WorkspaceMembership,
+  WorkspaceInvite,
+  WorkspaceMember,
+} from '../types';
 import { apiFetch } from '../lib/api';
 import {
   listWorkspaceInvites,
+  listWorkspaceMembers,
   sendWorkspaceInvite,
   revokeWorkspaceInvite,
 } from '../lib/supabaseService';
@@ -78,6 +86,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [isSendingInvite, setIsSendingInvite] = useState(false);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
 
+  // Workspace members state (owner view only)
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [membersError, setMembersError] = useState<string | null>(null);
+
   // Deletion modal state
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -90,23 +103,46 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     }
   }, [user]);
 
-  const loadWorkspaceInvitesList = React.useCallback(async (workspaceId: string) => {
-    setIsLoadingInvites(true);
-    setInvitesError(null);
-    try {
-      const list = await listWorkspaceInvites(workspaceId);
-      setInvites(list);
-    } catch (err: any) {
-      setInvitesError(err?.message || 'Unable to load workspace invitations.');
-    } finally {
-      setIsLoadingInvites(false);
-    }
-  }, []);
+  const loadWorkspaceInvitesList = React.useCallback(
+    async (workspaceId: string) => {
+      setIsLoadingInvites(true);
+      setIsLoadingMembers(true);
+      setInvitesError(null);
+      setMembersError(null);
+
+      let loadedInvites: WorkspaceInvite[] | undefined;
+      try {
+        const list = await listWorkspaceInvites(workspaceId);
+        loadedInvites = list;
+        setInvites(list);
+      } catch (err: any) {
+        setInvitesError(err?.message || 'Unable to load workspace invitations.');
+      } finally {
+        setIsLoadingInvites(false);
+      }
+
+      try {
+        const memberList = await listWorkspaceMembers(
+          workspaceId,
+          activeWorkspace?.ownerUserId || user?.id,
+          loadedInvites
+        );
+        setMembers(memberList);
+      } catch (err: any) {
+        setMembersError(err?.message || 'Unable to load workspace members.');
+      } finally {
+        setIsLoadingMembers(false);
+      }
+    },
+    [activeWorkspace?.ownerUserId, user?.id]
+  );
 
   React.useEffect(() => {
     if (!activeWorkspace?.id || isTeamMember) {
       setInvites([]);
+      setMembers([]);
       setInvitesError(null);
+      setMembersError(null);
       setIsInviteOpen(false);
       return;
     }
@@ -280,7 +316,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             </h1>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your personal profile, credentials, security, and account preferences.
+            Manage your personal profile, credentials, and account preferences.
           </p>
         </div>
 
@@ -564,7 +600,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               )}
             </div>
 
-            {workspaces.length > 0 && onSwitchWorkspace && (
+            {(isTeamMember || workspaces.length > 1) && workspaces.length > 0 && onSwitchWorkspace && (
               <div className="space-y-1.5">
                 <label
                   htmlFor="profile-workspace-selector"
@@ -683,27 +719,90 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             )}
           </div>
 
-          {/* Security & Data Residency Card */}
-          <div className="surface-card p-6 space-y-3.5 text-xs">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider text-muted-foreground">
-              Security & Privacy
-            </h3>
+          {/* Workspace Members Card (Owner account only) */}
+          {!isTeamMember && (
+            <div className="surface-card p-6 space-y-4 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Users className="size-4 text-primary shrink-0" />
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                    Workspace Members
+                  </h3>
+                </div>
+                <span className="inline-flex items-center rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[10px] font-mono font-semibold text-foreground">
+                  {members.length}
+                </span>
+              </div>
 
-            <div className="space-y-2 text-muted-foreground">
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="size-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Encrypted OAuth 2.0 authentication (Meta, Google, Microsoft)</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="size-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Zero raw password storage on Zivofly servers</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="size-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>GDPR and Meta Platform Data Protection compliant</span>
-              </div>
+              {isLoadingMembers && members.length === 0 ? (
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground py-2">
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                  <span>Loading workspace members…</span>
+                </div>
+              ) : membersError && members.length === 0 ? (
+                <div className="text-[11px] text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
+                  <span>{membersError}</span>
+                  {activeWorkspace?.id && (
+                    <button
+                      type="button"
+                      onClick={() => void loadWorkspaceInvitesList(activeWorkspace.id)}
+                      className="underline font-semibold shrink-0 cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              ) : members.length === 0 ? (
+                <div className="rounded-xl border border-border bg-muted/30 p-3.5 text-[11px] text-muted-foreground leading-relaxed">
+                  No members have joined this workspace yet. Use{' '}
+                  <span className="font-semibold text-foreground">Invite Team Member</span>{' '}
+                  to add teammates.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-0.5">
+                  {members.map((member) => (
+                    <div
+                      key={member.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-3 py-2.5"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {member.avatarUrl ? (
+                          <img
+                            src={member.avatarUrl}
+                            alt={member.name || member.email || 'Workspace member'}
+                            className="size-8 rounded-lg object-cover border border-border shrink-0"
+                          />
+                        ) : (
+                          <div className="size-8 rounded-lg bg-primary/10 text-primary border border-primary/20 flex items-center justify-center text-[11px] font-bold font-mono shrink-0">
+                            {getInitials(member.name, member.email)}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-semibold text-foreground truncate">
+                            {member.name || member.email || 'Workspace Member'}
+                          </div>
+                          {member.name && member.email && (
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {member.email}
+                            </div>
+                          )}
+                          {member.joinedAt && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Joined {new Date(member.joinedAt).toLocaleDateString()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-semibold text-foreground capitalize shrink-0">
+                        {member.role === 'admin' ? 'Admin' : 'Member'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
       </div>
 

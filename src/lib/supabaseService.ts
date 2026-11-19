@@ -16,6 +16,7 @@ import {
   WorkspaceMembership,
   WorkspaceRole,
   WorkspaceInvite,
+  WorkspaceMember,
 } from '../types';
 import { isCorruptedDocxText } from './fileTextExtractor';
 
@@ -6079,5 +6080,184 @@ export async function acceptWorkspaceInvite(
     userEmail,
     message: parsed.message || 'Could not accept this workspace invitation.',
   };
+}
+
+export async function listWorkspaceMembers(
+  workspaceId: string,
+  ownerUserId?: string,
+  existingInvites?: WorkspaceInvite[]
+): Promise<WorkspaceMember[]> {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured.');
+  }
+  if (!isValidUuid(workspaceId)) {
+    throw new Error('A valid workspace ID is required.');
+  }
+
+  let memberRows: any[] = [];
+  try {
+    const { data, error } = await supabase
+      .from('workspace_members')
+      .select('workspace_id, user_id, member_role, created_at')
+      .eq('workspace_id', workspaceId);
+
+    if (!error && Array.isArray(data)) {
+      memberRows = data;
+    } else {
+      const { data: fallbackData } = await supabase
+        .from('workspace_members')
+        .select('workspace_id, user_id, member_role')
+        .eq('workspace_id', workspaceId);
+      if (Array.isArray(fallbackData)) {
+        memberRows = fallbackData;
+      }
+    }
+  } catch {
+    // Ignore if RLS prevents direct listing of workspace_members
+  }
+
+  const nonOwnerRows = memberRows.filter((row) => {
+    if (!row?.user_id) return false;
+    if (ownerUserId && row.user_id === ownerUserId) return false;
+    return normalizeWorkspaceRole(row.member_role, false) !== 'owner';
+  });
+
+  const profileMap = new Map<
+    string,
+    { id: string; full_name?: string; email?: string; avatar_url?: string }
+  >();
+  const userIds = Array.from(
+    new Set(nonOwnerRows.map((r) => String(r.user_id)).filter(Boolean))
+  );
+
+  if (userIds.length > 0) {
+    try {
+      const { data: profileRows, error: profErr } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, avatar_url')
+        .in('id', userIds);
+
+      if (!profErr && Array.isArray(profileRows)) {
+        for (const p of profileRows) {
+          if (p?.id) profileMap.set(p.id, p);
+        }
+      } else {
+        const { data: fallbackProfiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', userIds);
+        for (const p of fallbackProfiles || []) {
+          if (p?.id) profileMap.set(p.id, p);
+        }
+      }
+    } catch {
+      // Ignore if RLS restricts reading other member profiles
+    }
+  }
+
+  let invitesSource = existingInvites;
+  if (!invitesSource) {
+    try {
+      invitesSource = await listWorkspaceInvites(workspaceId);
+    } catch {
+      invitesSource = [];
+    }
+  }
+
+  const acceptedInvites = (invitesSource || []).filter(
+    (inv) => String(inv.status || '').toLowerCase() === 'accepted' && Boolean(inv.email?.trim())
+  );
+
+  const members: WorkspaceMember[] = [];
+  const seenEmails = new Set<string>();
+  const unresolvedMemberRows: any[] = [];
+
+  for (const row of nonOwnerRows) {
+    const prof = profileMap.get(row.user_id);
+    const email = typeof prof?.email === 'string' ? prof.email.trim() : '';
+    const role = normalizeWorkspaceRole(row.member_role, false);
+    const joinedAt = row.created_at || null;
+
+    if (email) {
+      const emailKey = email.toLowerCase();
+      if (seenEmails.has(emailKey)) continue;
+      seenEmails.add(emailKey);
+      members.push({
+        id: String(row.user_id),
+        userId: String(row.user_id),
+        name: typeof prof?.full_name === 'string' && prof.full_name.trim() ? prof.full_name.trim() : undefined,
+        email,
+        role,
+        avatarUrl: typeof prof?.avatar_url === 'string' && prof.avatar_url.trim() ? prof.avatar_url.trim() : undefined,
+        joinedAt,
+      });
+    } else {
+      unresolvedMemberRows.push(row);
+    }
+  }
+
+  const unmatchedAcceptedInvites = acceptedInvites.filter(
+    (inv) => !seenEmails.has(inv.email.trim().toLowerCase())
+  );
+
+  for (const inv of unmatchedAcceptedInvites) {
+    const email = inv.email.trim();
+    const emailKey = email.toLowerCase();
+    if (seenEmails.has(emailKey)) continue;
+    seenEmails.add(emailKey);
+
+    const matchedRow =
+      unresolvedMemberRows.length === 1 && unmatchedAcceptedInvites.length === 1
+        ? unresolvedMemberRows[0]
+        : null;
+    const matchedProf = matchedRow ? profileMap.get(matchedRow.user_id) : undefined;
+
+    members.push({
+      id: matchedRow?.user_id || inv.id || emailKey,
+      userId: matchedRow?.user_id || undefined,
+      name:
+        typeof matchedProf?.full_name === 'string' && matchedProf.full_name.trim()
+          ? matchedProf.full_name.trim()
+          : undefined,
+      email,
+      role: normalizeWorkspaceRole(matchedRow?.member_role || inv.role, false),
+      avatarUrl:
+        typeof matchedProf?.avatar_url === 'string' && matchedProf.avatar_url.trim()
+          ? matchedProf.avatar_url.trim()
+          : undefined,
+      joinedAt: inv.accepted_at || matchedRow?.created_at || inv.created_at || null,
+    });
+  }
+
+  if (unresolvedMemberRows.length > unmatchedAcceptedInvites.length) {
+    const remainingCount = unresolvedMemberRows.length - unmatchedAcceptedInvites.length;
+    const extraRows = unresolvedMemberRows.slice(
+      unresolvedMemberRows.length - remainingCount
+    );
+    for (const row of extraRows) {
+      const prof = profileMap.get(row.user_id);
+      members.push({
+        id: String(row.user_id),
+        userId: String(row.user_id),
+        name:
+          typeof prof?.full_name === 'string' && prof.full_name.trim()
+            ? prof.full_name.trim()
+            : 'Workspace Member',
+        email: '',
+        role: normalizeWorkspaceRole(row.member_role, false),
+        avatarUrl:
+          typeof prof?.avatar_url === 'string' && prof.avatar_url.trim()
+            ? prof.avatar_url.trim()
+            : undefined,
+        joinedAt: row.created_at || null,
+      });
+    }
+  }
+
+  return members.sort((a, b) => {
+    const labelA = (a.name || a.email || '').toLowerCase();
+    const labelB = (b.name || b.email || '').toLowerCase();
+    return labelA.localeCompare(labelB);
+  });
 }
 

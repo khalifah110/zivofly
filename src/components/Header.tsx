@@ -206,7 +206,7 @@ export const Header: React.FC<HeaderProps> = ({
             <>
               {/* Desktop Workspace Selector, User Profile & Sign Out */}
               <div className="hidden sm:flex items-center gap-2">
-                {workspaces.length > 0 && onSwitchWorkspace && (
+                {isTeamMember && workspaces.length > 0 && onSwitchWorkspace && (
                   <div className="relative flex items-center">
                     <Building2 className="size-3.5 text-muted-foreground absolute left-2.5 pointer-events-none" />
                     <select
@@ -307,7 +307,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="sm:hidden border-t border-border bg-background/98 backdrop-blur-xl px-4 py-3 space-y-1 shadow-lg animate-in slide-in-from-top-2 duration-150">
           {user ? (
             <>
-              {workspaces.length > 0 && onSwitchWorkspace && (
+              {isTeamMember && workspaces.length > 0 && onSwitchWorkspace && (
                 <div className="px-2 pb-2 mb-1 border-b border-border/60">
                   <label
                     htmlFor="mobile-workspace-selector"
