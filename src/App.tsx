@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Toaster, toast } from 'sonner';
+import { ShieldAlert, Loader2, Inbox as InboxIcon, LayoutGrid } from 'lucide-react';
 import { Header } from './components/Header';
 import { LandingPage } from './pages/LandingPage';
 import { AuthPage } from './pages/AuthPage';
@@ -41,13 +42,21 @@ function normalizePathname(rawPath: string): string {
 
 function isRestrictedForTeamMember(path: string): boolean {
   return (
-    path === '/dashboard' ||
     path.startsWith('/connect/') ||
     path.startsWith('/channels/') ||
     path === '/agents' ||
     path.startsWith('/agents/') ||
     path === '/billing' ||
     path === '/billing-tokens'
+  );
+}
+
+function isWorkspaceProtectedRoute(path: string): boolean {
+  return (
+    path === '/dashboard' ||
+    path === '/inbox' ||
+    path === '/profile' ||
+    isRestrictedForTeamMember(path)
   );
 }
 
@@ -84,6 +93,7 @@ function AppContent() {
   const [connections, setConnections] = useState<ChannelConnection[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const lastWorkspaceIdRef = useRef<string | null>(null);
 
   const activeWorkspace = React.useMemo(
     () =>
@@ -125,6 +135,7 @@ function AppContent() {
           setAgents([]);
           setConnections([]);
           setConversations([]);
+          lastWorkspaceIdRef.current = null;
           clearActiveWorkspaceCache();
           localStorage.removeItem('zivofly_agents');
           localStorage.removeItem('zivofly_connections');
@@ -142,6 +153,17 @@ function AppContent() {
 
         setWorkspaces(memberships);
         if (resolvedWorkspace) {
+          if (
+            lastWorkspaceIdRef.current &&
+            lastWorkspaceIdRef.current !== resolvedWorkspace.id
+          ) {
+            localStorage.removeItem('zivofly_agents');
+            localStorage.removeItem('zivofly_connections');
+            localStorage.removeItem('zivofly_conversations');
+            localStorage.removeItem('zivofly_inbox_conv_status_overrides_v1');
+          }
+          lastWorkspaceIdRef.current = resolvedWorkspace.id;
+
           setActiveWorkspaceId(
             sessionUserId,
             resolvedWorkspace.id,
@@ -150,18 +172,18 @@ function AppContent() {
           setActiveWorkspaceStateId(resolvedWorkspace.id);
           memberRole = resolvedWorkspace.role === 'member';
         } else {
+          lastWorkspaceIdRef.current = null;
           setActiveWorkspaceStateId(null);
         }
       }
 
       if (memberRole) {
         localStorage.removeItem('zivofly_agents');
-        localStorage.removeItem('zivofly_connections');
         setAgents([]);
-        setConnections([]);
 
-        const [userRes, convsRes] = await Promise.all([
+        const [userRes, connRes, convsRes] = await Promise.all([
           apiFetch('/api/user/profile'),
+          apiFetch('/api/connections'),
           apiFetch('/api/conversations'),
         ]);
 
@@ -174,12 +196,29 @@ function AppContent() {
           }
         }
 
+        if (connRes.ok) {
+          const ct = connRes.headers.get('content-type');
+          if (ct?.includes('application/json')) {
+            const cData = await connRes.json();
+            const list = Array.isArray(cData.data)
+              ? cData.data
+              : Array.isArray(cData.connections)
+              ? cData.connections
+              : [];
+            setConnections(list);
+          }
+        } else {
+          setConnections([]);
+        }
+
         if (convsRes.ok) {
           const ct = convsRes.headers.get('content-type');
           if (ct?.includes('application/json')) {
             const cvData = await convsRes.json();
             setConversations(Array.isArray(cvData.conversations) ? cvData.conversations : []);
           }
+        } else {
+          setConversations([]);
         }
         return;
       }
@@ -253,6 +292,7 @@ function AppContent() {
           setAgents([]);
           setConnections([]);
           setConversations([]);
+          lastWorkspaceIdRef.current = null;
           clearActiveWorkspaceCache();
           localStorage.removeItem('zivofly_agents');
           localStorage.removeItem('zivofly_connections');
@@ -266,13 +306,8 @@ function AppContent() {
     }
   }, []);
 
-  // Redirect Team Members away from restricted owner/admin routes
-  useEffect(() => {
-    if (isLoading || !user || !isTeamMember) return;
-    if (isRestrictedForTeamMember(currentPath)) {
-      navigate('/inbox');
-    }
-  }, [isLoading, user, isTeamMember, currentPath]);
+  // Wait until workspace membership resolves before rendering restricted routes
+  // (direct access to restricted routes for team members renders an explicit Access Denied view)
 
   // Ensure Google OAuth callback query parameters are handled even if the Edge Function redirects to '/' or '/dashboard'
   useEffect(() => {
@@ -342,6 +377,7 @@ function AppContent() {
     }
     localStorage.removeItem('zivofly_token');
     localStorage.removeItem('zivofly_supabase_auth_token');
+    lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
     setWorkspaces([]);
@@ -359,6 +395,7 @@ function AppContent() {
     localStorage.removeItem('zivofly_agents');
     localStorage.removeItem('zivofly_connections');
     localStorage.removeItem('zivofly_conversations');
+    lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
     setWorkspaces([]);
@@ -469,24 +506,72 @@ function AppContent() {
     }
 
     if (currentPath === '/' && user) {
-      return <LandingPage onNavigate={navigate} isAuthenticated={true} />;
+      return (
+        <LandingPage
+          onNavigate={navigate}
+          isAuthenticated={true}
+          isTeamMember={isTeamMember}
+        />
+      );
+    }
+
+    if (isLoading && isWorkspaceProtectedRoute(currentPath)) {
+      return (
+        <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+          <Loader2 className="size-6 animate-spin text-primary" />
+          <p className="text-sm">Loading workspace…</p>
+        </div>
+      );
     }
 
     if (user && isTeamMember && isRestrictedForTeamMember(currentPath)) {
       return (
-        <InboxPage
-          conversations={conversations}
-          onUpdateConversation={handleUpdateConversation}
-          isTeamMember
-        />
+        <div className="mx-auto max-w-lg py-12">
+          <div className="surface-card p-6 sm:p-8 text-center space-y-5">
+            <div className="mx-auto size-12 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-600 dark:text-amber-400">
+              <ShieldAlert className="size-6" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-2xl font-medium tracking-tight text-foreground">
+                Access Denied
+              </h1>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                You are signed in as a <strong className="text-foreground">Team Member</strong> in{' '}
+                <strong className="text-foreground">{activeWorkspace?.name || 'this workspace'}</strong>.
+                Agents, billing, and channel connection controls are only available to workspace owners.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => navigate('/inbox')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:opacity-95 transition-opacity cursor-pointer"
+              >
+                <InboxIcon className="size-3.5" />
+                <span>Return to Inbox</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-accent transition-colors cursor-pointer"
+              >
+                <LayoutGrid className="size-3.5" />
+                <span>View Channels</span>
+              </button>
+            </div>
+          </div>
+        </div>
       );
     }
 
     if (currentPath === '/dashboard') {
       return (
         <DashboardPage
+          key={activeWorkspace?.id || 'default'}
           connections={connections}
           onNavigate={navigate}
+          isTeamMember={isTeamMember}
+          workspaceName={activeWorkspace?.name}
         />
       );
     }
@@ -546,6 +631,7 @@ function AppContent() {
     if (currentPath === '/inbox') {
       return (
         <InboxPage
+          key={activeWorkspace?.id || 'default'}
           conversations={conversations}
           onUpdateConversation={handleUpdateConversation}
           isTeamMember={isTeamMember}
@@ -560,6 +646,7 @@ function AppContent() {
     if (currentPath === '/profile') {
       return (
         <ProfilePage
+          key={activeWorkspace?.id || 'default'}
           user={user}
           agents={agents}
           connections={connections}
@@ -578,14 +665,18 @@ function AppContent() {
     return user ? (
       isTeamMember ? (
         <InboxPage
+          key={activeWorkspace?.id || 'default'}
           conversations={conversations}
           onUpdateConversation={handleUpdateConversation}
           isTeamMember
         />
       ) : (
         <DashboardPage
+          key={activeWorkspace?.id || 'default'}
           connections={connections}
           onNavigate={navigate}
+          isTeamMember={false}
+          workspaceName={activeWorkspace?.name}
         />
       )
     ) : (

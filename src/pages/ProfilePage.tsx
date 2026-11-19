@@ -545,8 +545,22 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                     {activeWorkspace?.name || 'Shared Workspace'}
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    As a Team Member, you can access the shared inbox, reply to customer conversations, and manage human handoffs.
+                    As a Team Member, you can view connected channels, reply in the shared inbox, and manage human handoffs.
                   </p>
+                </div>
+
+                <div
+                  onClick={() => onNavigate('/dashboard')}
+                  className="rounded-xl border border-border bg-muted/30 p-3.5 space-y-1 hover:bg-muted/50 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center justify-between text-muted-foreground">
+                    <span className="text-xs font-medium">Channels</span>
+                    <LayoutGrid className="size-4 text-primary" />
+                  </div>
+                  <div className="text-2xl font-bold font-mono text-foreground">
+                    {connections.length}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">Connected Lines (Read-only)</span>
                 </div>
 
                 <button

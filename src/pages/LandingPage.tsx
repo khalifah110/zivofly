@@ -21,6 +21,7 @@ import { PublicFooter } from '../components/PublicFooter';
 interface LandingPageProps {
   onNavigate: (path: string) => void;
   isAuthenticated: boolean;
+  isTeamMember?: boolean;
 }
 
 const GOOGLE_TOOLS = [
@@ -64,8 +65,11 @@ const GOOGLE_TOOLS = [
 export const LandingPage: React.FC<LandingPageProps> = ({
   onNavigate,
   isAuthenticated,
+  isTeamMember = false,
 }) => {
-  const ctaPath = isAuthenticated ? '/dashboard' : '/auth';
+  const ctaPath = isAuthenticated ? (isTeamMember ? '/inbox' : '/dashboard') : '/auth';
+  const channelCardPath = (channel: string) =>
+    isAuthenticated ? (isTeamMember ? '/dashboard' : `/connect/${channel}`) : '/auth';
 
   return (
     <div className="hero-glow min-h-[calc(100vh-4rem)] flex flex-col">
@@ -108,9 +112,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         {/* 5 Channels Preview Grid */}
         <div className="mt-20 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div
-            onClick={() =>
-              onNavigate(isAuthenticated ? '/connect/whatsapp' : '/auth')
-            }
+            onClick={() => onNavigate(channelCardPath('whatsapp'))}
             className="surface-card p-6 cursor-pointer hover:border-border/80 hover:shadow-md transition-all group"
           >
             <div className="size-10 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-4">
@@ -123,9 +125,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div
-            onClick={() =>
-              onNavigate(isAuthenticated ? '/connect/instagram' : '/auth')
-            }
+            onClick={() => onNavigate(channelCardPath('instagram'))}
             className="surface-card p-6 cursor-pointer hover:border-border/80 hover:shadow-md transition-all group"
           >
             <div className="size-10 rounded-xl bg-rose-500/10 flex items-center justify-center mb-4">
@@ -138,9 +138,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div
-            onClick={() =>
-              onNavigate(isAuthenticated ? '/connect/tiktok' : '/auth')
-            }
+            onClick={() => onNavigate(channelCardPath('tiktok'))}
             className="surface-card p-6 cursor-pointer hover:border-border/80 hover:shadow-md transition-all group"
           >
             <div className="size-10 rounded-xl bg-neutral-900/10 flex items-center justify-center mb-4">
@@ -153,9 +151,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div
-            onClick={() =>
-              onNavigate(isAuthenticated ? '/connect/call' : '/auth')
-            }
+            onClick={() => onNavigate(channelCardPath('call'))}
             className="surface-card p-6 cursor-pointer hover:border-border/80 hover:shadow-md transition-all group"
           >
             <div className="size-10 rounded-xl bg-amber-500/10 flex items-center justify-center mb-4">
@@ -168,9 +164,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div
-            onClick={() =>
-              onNavigate(isAuthenticated ? '/connect/messenger' : '/auth')
-            }
+            onClick={() => onNavigate(channelCardPath('messenger'))}
             className="surface-card p-6 cursor-pointer hover:border-border/80 hover:shadow-md transition-all group"
           >
             <div className="size-10 rounded-xl bg-blue-500/10 flex items-center justify-center mb-4">

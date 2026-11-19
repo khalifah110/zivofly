@@ -62,22 +62,20 @@ export const Header: React.FC<HeaderProps> = ({
 
           {user ? (
             <nav className="hidden items-center gap-1 sm:flex">
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => onNavigate('/dashboard')}
-                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
-                    currentPath === '/dashboard' ||
-                    currentPath.startsWith('/channels/') ||
-                    currentPath.startsWith('/connect/')
-                      ? 'bg-accent text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <LayoutGrid className="size-4" />
-                  <span>Channels</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => onNavigate('/dashboard')}
+                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/dashboard' ||
+                  currentPath.startsWith('/channels/') ||
+                  currentPath.startsWith('/connect/')
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <LayoutGrid className="size-4" />
+                <span>Channels</span>
+              </button>
 
               {!isTeamMember && (
                 <button
@@ -345,22 +343,20 @@ export const Header: React.FC<HeaderProps> = ({
                 Navigation
               </div>
 
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => handleMobileNavClick('/dashboard')}
-                  className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-                    currentPath === '/dashboard' ||
-                    currentPath.startsWith('/channels/') ||
-                    currentPath.startsWith('/connect/')
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-foreground hover:bg-accent'
-                  }`}
-                >
-                  <LayoutGrid className="size-4.5 text-primary" />
-                  <span>Channels</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/dashboard')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/dashboard' ||
+                  currentPath.startsWith('/channels/') ||
+                  currentPath.startsWith('/connect/')
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <LayoutGrid className="size-4.5 text-primary" />
+                <span>Channels</span>
+              </button>
 
               {!isTeamMember && (
                 <button
