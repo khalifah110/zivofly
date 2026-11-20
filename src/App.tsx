@@ -16,6 +16,7 @@ import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage';
 import { TermsOfServicePage } from './pages/TermsOfServicePage';
 import { SupportPage } from './pages/SupportPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import {
   Agent,
   ChannelConnection,
@@ -484,6 +485,23 @@ function AppContent() {
       );
     }
 
+    if (currentPath === '/reset-password') {
+      return (
+        <ResetPasswordPage
+          onNavigate={navigate}
+          onSessionCleared={() => {
+            clearActiveWorkspaceCache(user?.id);
+            setUser(null);
+            setWorkspaces([]);
+            setActiveWorkspaceStateId(null);
+            setAgents([]);
+            setConnections([]);
+            setConversations([]);
+          }}
+        />
+      );
+    }
+
     if (currentPath === '/auth') {
       return (
         <AuthPage
@@ -736,6 +754,7 @@ function AppContent() {
     currentPath === '/' ||
     currentPath === '/auth' ||
     currentPath === '/accept-invite' ||
+    currentPath === '/reset-password' ||
     currentPath === '/privacy' ||
     currentPath === '/privacy-policy' ||
     currentPath === '/terms' ||

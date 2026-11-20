@@ -5,6 +5,9 @@ import {
   Ban,
   CheckCircle2,
   Clock,
+  Eye,
+  EyeOff,
+  KeyRound,
   Loader2,
   LogOut,
   MailWarning,
@@ -12,6 +15,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import type { EmailOtpType } from '@supabase/supabase-js';
 import { User, WorkspaceRole } from '../types';
 import { supabase } from '../lib/supabaseClient';
 import {
@@ -23,6 +27,7 @@ import {
 export type InviteAcceptPageState =
   | 'pending_auth'
   | 'pending_accept'
+  | 'password_setup'
   | 'accepted'
   | 'expired'
   | 'revoked'
@@ -83,7 +88,17 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
   const [invitedEmailHint, setInvitedEmailHint] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
+  // Password setup state (when authenticated account has no password set yet)
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isSettingPassword, setIsSettingPassword] = useState(false);
+
   const attemptedForUserRef = useRef<string | null>(null);
+  const urlAuthCheckedRef = useRef<boolean>(false);
+  const urlAuthErrorRef = useRef<string | null>(null);
 
   // Keep invite_token in URL bar if restored from sessionStorage after an OAuth redirect
   useEffect(() => {
@@ -91,10 +106,106 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
     const params = new URLSearchParams(window.location.search);
     if (!params.get('invite_token')) {
       params.set('invite_token', inviteToken);
-      const nextUrl = `/accept-invite?${params.toString()}`;
+      const nextUrl = `/accept-invite?${params.toString()}${window.location.hash || ''}`;
       window.history.replaceState({}, '', nextUrl);
     }
   }, [inviteToken]);
+
+  // Process invite email auth params (token_hash, PKCE code, or URL errors) while preserving invite_token
+  useEffect(() => {
+    if (urlAuthCheckedRef.current || isAuthLoading || user || !supabase || typeof window === 'undefined') {
+      return;
+    }
+    urlAuthCheckedRef.current = true;
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const rawHash = window.location.hash.startsWith('#')
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    const hashParams = new URLSearchParams(rawHash);
+
+    const urlError =
+      searchParams.get('error_description') ||
+      hashParams.get('error_description') ||
+      searchParams.get('error') ||
+      hashParams.get('error');
+
+    const tokenHash = searchParams.get('token_hash')?.trim();
+    const code = searchParams.get('code')?.trim();
+    const typeParam = (searchParams.get('type') || hashParams.get('type') || 'invite').trim();
+
+    if (!urlError && !tokenHash && !code) return;
+
+    const scrubAuthParamsKeepInviteToken = () => {
+      const cleanParams = new URLSearchParams();
+      if (inviteToken) {
+        cleanParams.set('invite_token', inviteToken);
+      }
+      const query = cleanParams.toString();
+      window.history.replaceState({}, '', query ? `/accept-invite?${query}` : '/accept-invite');
+    };
+
+    if (urlError) {
+      scrubAuthParamsKeepInviteToken();
+      const friendlyError =
+        urlError.replace(/\+/g, ' ').trim() ||
+        'This invitation sign-in link is invalid or has expired.';
+      urlAuthErrorRef.current = friendlyError;
+      setPageState('error');
+      setStatusMessage(friendlyError);
+      return;
+    }
+
+    const processUrlAuth = async () => {
+      if (!supabase) return;
+      setIsBusy(true);
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session) {
+          scrubAuthParamsKeepInviteToken();
+          return;
+        }
+
+        if (tokenHash) {
+          const { error: otpErr } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: (typeParam as EmailOtpType) || 'invite',
+          });
+          scrubAuthParamsKeepInviteToken();
+          if (otpErr) {
+            const msg = otpErr.message || 'Could not verify your invitation sign-in link.';
+            urlAuthErrorRef.current = msg;
+            setPageState('error');
+            setStatusMessage(msg);
+          }
+          return;
+        }
+
+        if (code) {
+          const { error: exchangeErr } = await supabase.auth.exchangeCodeForSession(code);
+          const { data: afterCode } = await supabase.auth.getSession();
+          scrubAuthParamsKeepInviteToken();
+          if (exchangeErr && !afterCode?.session) {
+            const msg =
+              exchangeErr.message || 'Could not complete sign-in from your invitation link.';
+            urlAuthErrorRef.current = msg;
+            setPageState('error');
+            setStatusMessage(msg);
+          }
+        }
+      } catch (err: any) {
+        scrubAuthParamsKeepInviteToken();
+        const msg = err?.message || 'Unable to verify your invitation sign-in link.';
+        urlAuthErrorRef.current = msg;
+        setPageState('error');
+        setStatusMessage(msg);
+      } finally {
+        setIsBusy(false);
+      }
+    };
+
+    void processUrlAuth();
+  }, [isAuthLoading, user, inviteToken]);
 
   const runAcceptFlow = async () => {
     if (!inviteToken) {
@@ -126,6 +237,14 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
         setStatusMessage(result.message);
         await onInviteAccepted(result.workspaceId);
         toast.success(result.message);
+        return;
+      }
+
+      if (result.status === 'password_required') {
+        // Keep inviteToken preserved in state, URL, and sessionStorage while user sets a password
+        setPasswordError(null);
+        setPageState('password_setup');
+        setStatusMessage(result.message);
         return;
       }
 
@@ -179,6 +298,11 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
     if (!user) {
       attemptedForUserRef.current = null;
       setSignedInEmail(null);
+      if (urlAuthErrorRef.current) {
+        setPageState('error');
+        setStatusMessage(urlAuthErrorRef.current);
+        return;
+      }
       setPageState('pending_auth');
       setStatusMessage(
         'Sign in or create an account using the exact verified email address that received this invitation.'
@@ -186,6 +310,7 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
       return;
     }
 
+    urlAuthErrorRef.current = null;
     const attemptKey = `${user.id}:${inviteToken}`;
     if (attemptedForUserRef.current === attemptKey) {
       return;
@@ -193,6 +318,57 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
     attemptedForUserRef.current = attemptKey;
     void runAcceptFlow();
   }, [user, isAuthLoading, inviteToken]);
+
+  const handlePasswordSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+
+    if (newPassword.length < 6) {
+      setPasswordError('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Passwords do not match.');
+      return;
+    }
+
+    if (!supabase) {
+      setPasswordError('Authentication service is not configured.');
+      return;
+    }
+
+    setIsSettingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        setPasswordError(error.message || 'Could not set account password.');
+        toast.error(error.message || 'Could not set account password.');
+        return;
+      }
+
+      setNewPassword('');
+      setConfirmPassword('');
+
+      try {
+        await supabase.auth.refreshSession();
+      } catch {
+        // ignore transient refresh failure; getVerifiedSupabaseAccessToken handles token verification
+      }
+
+      toast.success('Password set! Completing workspace invitation…');
+      await runAcceptFlow();
+    } catch (err: any) {
+      const msg = err?.message || 'Unable to set password on your account.';
+      setPasswordError(msg);
+      toast.error(msg);
+    } finally {
+      setIsSettingPassword(false);
+    }
+  };
 
   const handleGoToAuth = (authMode: 'signin' | 'signup') => {
     if (inviteToken) {
@@ -301,6 +477,13 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
             <span>Error</span>
           </span>
         );
+      case 'password_setup':
+        return (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/25 px-2.5 py-1 text-xs font-semibold text-primary">
+            <KeyRound className="size-3.5" />
+            <span>Password Required</span>
+          </span>
+        );
       case 'pending_auth':
       case 'pending_accept':
       default:
@@ -407,6 +590,132 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
               <p className="text-xs text-muted-foreground">
                 {statusMessage}
               </p>
+            </div>
+          )}
+
+          {pageState === 'password_setup' && (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 text-xs sm:text-sm space-y-2">
+                <div className="flex items-center gap-2 font-semibold text-foreground">
+                  <KeyRound className="size-4 text-primary shrink-0" />
+                  <span>Set a password on your account</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {statusMessage}
+                </p>
+                {(signedInEmail || user?.email) && (
+                  <p className="text-xs text-foreground pt-0.5">
+                    Signed in as:{' '}
+                    <span className="font-mono font-semibold">
+                      {signedInEmail || user?.email}
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              {passwordError && (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive flex items-start gap-2">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  <span>{passwordError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handlePasswordSetupSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="invite-new-password"
+                    className="text-xs font-medium text-foreground"
+                  >
+                    New password
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="invite-new-password"
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      autoComplete="new-password"
+                      placeholder="At least 6 characters"
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 pr-10 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword((prev) => !prev)}
+                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1 cursor-pointer"
+                    >
+                      {showNewPassword ? (
+                        <EyeOff className="size-4" />
+                      ) : (
+                        <Eye className="size-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="invite-confirm-password"
+                    className="text-xs font-medium text-foreground"
+                  >
+                    Confirm password
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="invite-confirm-password"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      autoComplete="new-password"
+                      placeholder="Re-enter your password"
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 pr-10 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                      aria-label={
+                        showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
+                      }
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1 cursor-pointer"
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="size-4" />
+                      ) : (
+                        <Eye className="size-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSettingPassword || isBusy}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary py-2.5 text-xs sm:text-sm font-semibold text-primary-foreground hover:opacity-95 transition-opacity disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  {(isSettingPassword || isBusy) && (
+                    <Loader2 className="size-4 animate-spin" />
+                  )}
+                  <span>
+                    {isSettingPassword
+                      ? 'Saving password…'
+                      : 'Set Password & Accept Invitation'}
+                  </span>
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={handleSwitchAccount}
+                disabled={isSettingPassword || isBusy}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <LogOut className="size-3.5" />
+                <span>Sign out &amp; switch account</span>
+              </button>
             </div>
           )}
 
@@ -537,6 +846,18 @@ export const AcceptInvitePage: React.FC<AcceptInvitePageProps> = ({
                     className="flex-1 rounded-xl bg-primary py-2.5 text-xs sm:text-sm font-medium text-primary-foreground hover:opacity-95 transition-opacity disabled:opacity-50 cursor-pointer"
                   >
                     Try again
+                  </button>
+                )}
+                {inviteToken && !user && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      urlAuthErrorRef.current = null;
+                      handleGoToAuth('signin');
+                    }}
+                    className="flex-1 rounded-xl bg-primary py-2.5 text-xs sm:text-sm font-medium text-primary-foreground hover:opacity-95 transition-opacity cursor-pointer"
+                  >
+                    Sign in
                   </button>
                 )}
                 <button

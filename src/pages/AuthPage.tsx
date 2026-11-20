@@ -40,6 +40,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('mode') === 'signup') return 'signup';
+      if (params.get('mode') === 'forgot_password') return 'forgot_password';
     }
     return 'signin';
   });
@@ -55,18 +56,33 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resetEmailSent, setResetEmailSent] = useState(false);
+  const [passwordUpdatedBanner, setPasswordUpdatedBanner] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('reset') === 'success';
+    }
+    return false;
+  });
 
   const acceptInvitePath = inviteToken
     ? `/accept-invite?invite_token=${encodeURIComponent(inviteToken)}`
     : '/dashboard';
 
   useEffect(() => {
-    if (inviteToken && typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.get('invite_token')) {
-        params.set('invite_token', inviteToken);
-        window.history.replaceState({}, '', `/auth?${params.toString()}`);
-      }
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    let updated = false;
+    if (inviteToken && !params.get('invite_token')) {
+      params.set('invite_token', inviteToken);
+      updated = true;
+    }
+    if (params.get('reset') === 'success') {
+      params.delete('reset');
+      updated = true;
+    }
+    if (updated) {
+      const query = params.toString();
+      window.history.replaceState({}, '', query ? `/auth?${query}` : '/auth');
     }
   }, [inviteToken]);
 
@@ -85,7 +101,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
         }
 
         if (supabase) {
-          const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+          const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+            redirectTo: `${window.location.origin}/reset-password`,
+          });
           if (error) {
             setErrorMessage(error.message);
             toast.error(error.message);
@@ -264,6 +282,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
             <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
               <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
               <span>Check your inbox for password reset instructions.</span>
+            </div>
+          )}
+
+          {passwordUpdatedBanner && mode === 'signin' && !resetEmailSent && (
+            <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2">
+              <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
+              <span>Your password has been updated. Sign in with your new password.</span>
             </div>
           )}
 

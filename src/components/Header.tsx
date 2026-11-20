@@ -34,7 +34,10 @@ export const Header: React.FC<HeaderProps> = ({
   activeWorkspace = null,
   onSwitchWorkspace,
 }) => {
-  const isAuthPage = currentPath === '/auth' || currentPath === '/accept-invite';
+  const isAuthPage =
+    currentPath === '/auth' ||
+    currentPath === '/accept-invite' ||
+    currentPath === '/reset-password';
   const { isDark, toggleTheme } = useTheme();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 

@@ -5839,7 +5839,13 @@ export async function updateSupabaseConversationStatus(
 }
 
 export interface WorkspaceInviteAcceptOutcome {
-  status: 'accepted' | 'expired' | 'revoked' | 'wrong_account' | 'error';
+  status:
+    | 'accepted'
+    | 'password_required'
+    | 'expired'
+    | 'revoked'
+    | 'wrong_account'
+    | 'error';
   message: string;
   workspaceId?: string;
   workspaceName?: string;
@@ -5863,12 +5869,14 @@ async function parseWorkspaceInvitesResponsePayload(params: {
   const httpStatus = respObj?.status ?? (error ? 500 : 200);
 
   let parsedBody: any = data && typeof data === 'object' ? data : null;
+  let rawText = typeof data === 'string' ? data.trim() : '';
   if (!parsedBody && respObj) {
     try {
       const cloned = respObj.clone();
       const text = await cloned.text();
       if (text) {
-        parsedBody = JSON.parse(text);
+        rawText = text.trim();
+        parsedBody = JSON.parse(rawText);
       }
     } catch {
       // ignore non-JSON body
@@ -5879,6 +5887,7 @@ async function parseWorkspaceInvitesResponsePayload(params: {
     (typeof parsedBody?.error === 'string' && parsedBody.error.trim()) ||
     (typeof parsedBody?.message === 'string' && parsedBody.message.trim()) ||
     (typeof parsedBody?.reason === 'string' && parsedBody.reason.trim()) ||
+    rawText ||
     (typeof error?.message === 'string' && error.message.trim()) ||
     '';
 
@@ -6183,6 +6192,33 @@ export async function acceptWorkspaceInvite(
       message:
         parsed.message ||
         'This invitation has been revoked and can no longer be accepted.',
+    };
+  }
+
+  if (
+    statusStr.includes('password_required') ||
+    statusStr.includes('password_setup') ||
+    statusStr.includes('set_password') ||
+    statusStr.includes('requires_password') ||
+    msgLower.includes('set a password on your account before accepting a workspace invitation') ||
+    msgLower.includes('set a password') ||
+    (msgLower.includes('password') &&
+      (msgLower.includes('before accepting') ||
+        msgLower.includes('required') ||
+        msgLower.includes('must set')))
+  ) {
+    return {
+      status: 'password_required',
+      userEmail,
+      invitedEmail:
+        typeof payload.invited_email === 'string'
+          ? payload.invited_email
+          : typeof payload.email === 'string'
+          ? payload.email
+          : null,
+      message:
+        parsed.message ||
+        'Set a password on your account before accepting a workspace invitation.',
     };
   }
 
