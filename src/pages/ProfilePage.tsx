@@ -68,7 +68,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const resolveCleanBusinessName = (u: User | null) => {
     if (!u?.businessName) return '';
     const trimmed = u.businessName.trim();
-    if (trimmed === 'My Business' || (u.name && trimmed.toLowerCase() === u.name.trim().toLowerCase())) {
+    if (trimmed === 'My Business' || trimmed === 'My Workspace') {
       return '';
     }
     return trimmed;
@@ -271,26 +271,46 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const hasEnteredValidBusinessName = (rawValue: string) => {
     const trimmed = rawValue.trim();
     if (!trimmed) return false;
-    if (trimmed === 'My Business') return false;
+    if (trimmed === 'My Business' || trimmed === 'My Workspace') return false;
     return true;
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       toast.error('Full name cannot be empty');
+      return;
+    }
+
+    const savedName = (user?.name || '').trim();
+    const trimmedBiz = businessName.trim();
+    const savedBiz = resolveCleanBusinessName(user);
+    const nameChanged = trimmedName !== savedName;
+    const bizChanged = !isTeamMember && trimmedBiz !== savedBiz;
+    const workspaceNeedsSync =
+      !isTeamMember &&
+      hasEnteredValidBusinessName(trimmedBiz) &&
+      activeWorkspace?.name !== trimmedBiz;
+
+    const payload: Record<string, string> = {};
+    if (nameChanged) {
+      payload.name = trimmedName;
+    }
+    if (bizChanged || workspaceNeedsSync) {
+      payload.businessName = trimmedBiz;
+      if (activeWorkspace?.id) {
+        payload.workspaceId = activeWorkspace.id;
+      }
+    }
+
+    if (!nameChanged && !bizChanged && !workspaceNeedsSync) {
+      toast.info('No profile changes to save');
       return;
     }
 
     setIsSaving(true);
     try {
-      const payload: Record<string, string> = {
-        name: name.trim(),
-      };
-      if (!isTeamMember) {
-        payload.businessName = businessName.trim();
-      }
-
       const res = await apiFetch('/api/user/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -301,21 +321,21 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         const data = await res.json();
         const updated = data.user || {
           ...user,
-          name: name.trim(),
-          ...(isTeamMember ? {} : { businessName: businessName.trim() }),
+          ...(nameChanged ? { name: trimmedName } : {}),
+          ...(bizChanged || workspaceNeedsSync ? { businessName: trimmedBiz } : {}),
         };
         onUserUpdated(updated);
 
-        // Broadcast updated full name to all workspaces this account belongs to so owners see it immediately
-        const targetWorkspaceIds = Array.from(
-          new Set(
-            [
-              ...(workspaces || []).map((w) => w.id),
-              activeWorkspace?.id || '',
-            ].filter(Boolean)
-          )
-        );
-        if (updated?.id && updated?.name) {
+        // Broadcast updated full name only when full_name actually changed
+        if (nameChanged && updated?.id && updated?.name) {
+          const targetWorkspaceIds = Array.from(
+            new Set(
+              [
+                ...(workspaces || []).map((w) => w.id),
+                activeWorkspace?.id || '',
+              ].filter(Boolean)
+            )
+          );
           void broadcastMemberProfileUpdate({
             userId: updated.id,
             fullName: updated.name,
@@ -363,23 +383,25 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     setIsSendingInvite(true);
     try {
       const savedBiz = resolveCleanBusinessName(user);
-      if (trimmedBiz !== savedBiz) {
+      if (trimmedBiz !== savedBiz || activeWorkspace.name !== trimmedBiz) {
         const profileRes = await apiFetch('/api/user/profile', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: (name.trim() || user?.name || '').trim(),
             businessName: trimmedBiz,
+            workspaceId: activeWorkspace.id,
           }),
         });
         if (!profileRes.ok) {
-          toast.error('Failed to save your Business Name before sending the invite.');
+          const errData = await profileRes.json().catch(() => ({}));
+          toast.error(
+            errData?.error || 'Failed to save your Business Name before sending the invite.'
+          );
           return;
         }
         const profileData = await profileRes.json().catch(() => ({}));
         const updatedUser = profileData.user || {
           ...user,
-          name: (name.trim() || user?.name || '').trim(),
           businessName: trimmedBiz,
         };
         onUserUpdated(updatedUser);
@@ -712,16 +734,18 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </div>
             )}
 
-            <div className="pt-3 border-t border-border flex justify-end">
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground px-5 py-2.5 text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <Save className="size-3.5" />
-                <span>{isSaving ? 'Saving changes…' : 'Save Profile Changes'}</span>
-              </button>
-            </div>
+            {(!isTeamMember || name.trim() !== (user?.name || '').trim()) && (
+              <div className="pt-3 border-t border-border flex justify-end">
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground px-5 py-2.5 text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="size-3.5" />
+                  <span>{isSaving ? 'Saving changes…' : 'Save Profile Changes'}</span>
+                </button>
+              </div>
+            )}
           </form>
         </div>
 

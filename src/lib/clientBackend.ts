@@ -331,7 +331,15 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     if (method === 'PUT') {
       const currentUser = getStored<User | null>(STORAGE_KEYS.USER, null);
       const userId = await resolveCurrentUserId();
+      if (isSupabaseConfigured && (!userId || userId.startsWith('user_default'))) {
+        return jsonResponse(
+          { error: 'Authentication required to update your profile.' },
+          401
+        );
+      }
+
       const incomingBody = { ...(body || {}) };
+      let isMemberRole = false;
 
       if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
         try {
@@ -339,38 +347,72 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
           const storedWsId = getStoredActiveWorkspaceId(userId);
           const activeWs =
             memberships.find((w) => w.id === storedWsId) || memberships[0] || null;
-          if (activeWs?.role === 'member') {
-            delete incomingBody.businessName;
-          }
+          isMemberRole = activeWs?.role === 'member';
         } catch {
           // ignore workspace lookup failures
         }
       }
 
+      if (isMemberRole) {
+        const hasRestrictedFields =
+          typeof incomingBody.businessName === 'string' ||
+          typeof incomingBody.workspaceId === 'string';
+        if (hasRestrictedFields && typeof incomingBody.name !== 'string') {
+          return jsonResponse(
+            { error: 'Team members cannot update business name or workspace settings.' },
+            403
+          );
+        }
+        delete incomingBody.businessName;
+        delete incomingBody.workspaceId;
+      }
+
+      const targetWorkspaceId =
+        !isMemberRole &&
+        typeof incomingBody.workspaceId === 'string' &&
+        incomingBody.workspaceId.trim()
+          ? incomingBody.workspaceId.trim()
+          : undefined;
+
       const supabasePatch: Partial<User> = {};
       if (typeof incomingBody.name === 'string') {
-        supabasePatch.name = incomingBody.name.trim();
+        const nextName = incomingBody.name.trim();
+        if (!nextName) {
+          return jsonResponse({ error: 'Full name cannot be empty.' }, 400);
+        }
+        if (!currentUser || nextName !== (currentUser.name || '').trim()) {
+          supabasePatch.name = nextName;
+        }
       }
-      if (typeof incomingBody.businessName === 'string') {
+      if (!isMemberRole && typeof incomingBody.businessName === 'string') {
         supabasePatch.businessName = incomingBody.businessName.trim();
       }
       if (typeof incomingBody.avatarUrl === 'string' && incomingBody.avatarUrl.trim()) {
         supabasePatch.avatarUrl = incomingBody.avatarUrl.trim();
       }
       if (typeof incomingBody.email === 'string' && incomingBody.email.trim()) {
-        supabasePatch.email = incomingBody.email.trim();
-      } else if (currentUser?.email) {
-        supabasePatch.email = currentUser.email;
+        const nextEmail = incomingBody.email.trim();
+        if (!currentUser || nextEmail !== (currentUser.email || '').trim()) {
+          supabasePatch.email = nextEmail;
+        }
       }
 
+      const cleanUserPatch: Partial<User> = { ...supabasePatch };
       let updatedUser: User = {
         ...(currentUser || { id: userId, email: '', name: '', businessName: '' }),
-        ...incomingBody,
+        ...cleanUserPatch,
       };
 
-      if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
+      if (
+        isSupabaseConfigured &&
+        userId &&
+        !userId.startsWith('user_default') &&
+        Object.keys(supabasePatch).length > 0
+      ) {
         try {
-          const supaUpdated = await updateSupabaseProfile(userId, supabasePatch);
+          const supaUpdated = await updateSupabaseProfile(userId, supabasePatch, {
+            workspaceId: targetWorkspaceId,
+          });
           if (supaUpdated) updatedUser = supaUpdated;
         } catch (e: any) {
           console.warn('[Zivofly] Supabase profile update error:', e);

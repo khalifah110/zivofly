@@ -31,6 +31,7 @@ import {
   getStoredActiveWorkspaceId,
   getUserWorkspaceMemberships,
   processGoogleWorkspaceOAuthCallbackFromUrl,
+  saveJoinedWorkspaceNameHint,
   setActiveWorkspaceId,
 } from './lib/supabaseService';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -671,6 +672,28 @@ function AppContent() {
           onSwitchWorkspace={handleSwitchWorkspace}
           onUserUpdated={(updated) => {
             setUser(updated);
+            const updatedBiz =
+              typeof updated?.businessName === 'string'
+                ? updated.businessName.trim()
+                : '';
+            if (
+              updatedBiz &&
+              updatedBiz !== 'My Business' &&
+              updatedBiz !== 'My Workspace'
+            ) {
+              setWorkspaces((prev) =>
+                prev.map((ws) => {
+                  if (ws.role === 'owner') {
+                    saveJoinedWorkspaceNameHint(ws.id, updatedBiz);
+                    if (activeWorkspace?.id === ws.id && updated?.id) {
+                      setActiveWorkspaceId(updated.id, ws.id, updatedBiz);
+                    }
+                    return { ...ws, name: updatedBiz };
+                  }
+                  return ws;
+                })
+              );
+            }
             if (supabase && updated?.id) {
               void getUserWorkspaceMemberships(updated.id)
                 .then((memberships) => {
