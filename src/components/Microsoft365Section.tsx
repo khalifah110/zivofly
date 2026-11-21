@@ -76,22 +76,6 @@ export const Microsoft365Section: React.FC<Microsoft365SectionProps> = ({
 
   const connectedCount = apps.filter((app) => app.isConnected).length;
 
-  const handleConnect = (key: 'outlook' | 'excel' | 'word' | 'sharepoint', appName: string) => {
-    const currentApp = config[key] || { enabled: false, status: 'disconnected' };
-    const updated: Microsoft365Config = {
-      ...config,
-      [key]: {
-        ...currentApp,
-        enabled: true,
-        status: 'connected',
-        lastSyncedAt: new Date().toISOString(),
-        accountEmail: 'business@office365.com',
-      },
-    };
-    onChange?.(updated);
-    toast.info('Microsoft 365 OAuth connect will be added soon.');
-  };
-
   const handleDisconnect = (key: 'outlook' | 'excel' | 'word' | 'sharepoint', appName: string) => {
     const currentApp = config[key];
     const updated: Microsoft365Config = {
@@ -219,11 +203,12 @@ export const Microsoft365Section: React.FC<Microsoft365SectionProps> = ({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => handleConnect(app.key, app.name)}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 transition-colors shadow-xs cursor-pointer"
+                          disabled
+                          aria-disabled="true"
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground cursor-not-allowed opacity-80"
                         >
-                          <LogoComponent className="size-3.5" />
-                          <span>Connect to {app.name}</span>
+                          <LogoComponent className="size-3.5 opacity-75" />
+                          <span>Coming Soon</span>
                         </button>
                       )}
                     </div>

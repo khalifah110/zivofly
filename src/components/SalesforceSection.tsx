@@ -73,55 +73,6 @@ export const SalesforceSection: React.FC<SalesforceSectionProps> = ({
 
   const connectedCount = services.filter((s) => s.isConnected).length;
 
-  const handleConnect = (serviceKey: 'salesAndServiceCloud' | 'marketingCloud', serviceName: string) => {
-    let updated: SalesforceConfig;
-
-    if (serviceKey === 'salesAndServiceCloud') {
-      const now = new Date().toISOString();
-      const email = 'admin@salesforce.org';
-      updated = {
-        ...config,
-        salesAndServiceCloud: {
-          enabled: true,
-          status: 'connected',
-          lastSyncedAt: now,
-          accountEmail: email,
-        },
-        salesCloud: {
-          enabled: true,
-          status: 'connected',
-          lastSyncedAt: now,
-          accountEmail: email,
-        },
-        serviceCloud: {
-          enabled: true,
-          status: 'connected',
-          lastSyncedAt: now,
-          accountEmail: email,
-        },
-        contacts: {
-          enabled: true,
-          status: 'connected',
-          lastSyncedAt: now,
-          accountEmail: email,
-        },
-      };
-    } else {
-      updated = {
-        ...config,
-        marketingCloud: {
-          enabled: true,
-          status: 'connected',
-          lastSyncedAt: new Date().toISOString(),
-          accountEmail: 'marketing@salesforce.org',
-        },
-      };
-    }
-
-    onChange?.(updated);
-    toast.info('Salesforce OAuth connect will be added soon.');
-  };
-
   const handleDisconnect = (serviceKey: 'salesAndServiceCloud' | 'marketingCloud', serviceName: string) => {
     let updated: SalesforceConfig;
 
@@ -271,11 +222,12 @@ export const SalesforceSection: React.FC<SalesforceSectionProps> = ({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => handleConnect(service.key, service.name)}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 transition-colors shadow-xs cursor-pointer"
+                          disabled
+                          aria-disabled="true"
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground cursor-not-allowed opacity-80"
                         >
-                          <SalesforceLogo className="size-3.5" />
-                          <span>Connect to {service.shortName}</span>
+                          <SalesforceLogo className="size-3.5 opacity-75" />
+                          <span>Coming Soon</span>
                         </button>
                       )}
                     </div>

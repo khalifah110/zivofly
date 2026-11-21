@@ -25,16 +25,6 @@ export const GoogleWorkspaceLogo: React.FC<{ className?: string }> = ({ classNam
   </svg>
 );
 
-export const GmailLogo: React.FC<{ className?: string }> = ({ className = 'size-5' }) => (
-  <svg viewBox="52 42 88 66" className={className} aria-label="Gmail">
-    <path fill="#4285F4" d="M58 108h14V74L52 59v43c0 3.32 2.69 6 6 6" />
-    <path fill="#34A853" d="M120 108h14c3.32 0 6-2.69 6-6V59l-20 15" />
-    <path fill="#FBBC04" d="M120 48v26l20-15v-8c0-7.42-8.47-11.65-14.4-7.2" />
-    <path fill="#EA4335" d="M72 74V48l24 18 24-18v26L96 92" />
-    <path fill="#C5221F" d="M52 51v8l20 15V48l-5.6-4.2c-5.94-4.45-14.4-.22-14.4 7.2" />
-  </svg>
-);
-
 export const GoogleDriveLogo: React.FC<{ className?: string }> = ({ className = 'size-5' }) => (
   <svg viewBox="0 0 87.3 78" className={className} aria-label="Google Drive">
     <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066DA" />

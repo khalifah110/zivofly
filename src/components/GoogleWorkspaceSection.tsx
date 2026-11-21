@@ -8,6 +8,8 @@ import {
   RefreshCw,
   Unplug,
   X,
+  GripVertical,
+  RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -19,9 +21,6 @@ import {
 } from '../types';
 import {
   GoogleWorkspaceLogo,
-  GmailLogo,
-  GoogleDriveLogo,
-  GoogleDocsLogo,
   GoogleSheetsLogo,
   GoogleCalendarLogo,
 } from './BrandLogos';
@@ -63,6 +62,69 @@ interface DisconnectTarget {
   workspaceId: string | null;
 }
 
+type VisibleGoogleWorkspaceAppKey = 'sheets' | 'calendar';
+
+const DEFAULT_GOOGLE_APPS_ORDER: readonly VisibleGoogleWorkspaceAppKey[] = [
+  'sheets',
+  'calendar',
+] as const;
+
+const GOOGLE_APPS_ORDER_STORAGE_KEY = 'zivofly_google_workspace_apps_order_v1';
+
+function sanitizeGoogleAppsOrder(raw: unknown): VisibleGoogleWorkspaceAppKey[] {
+  const validSet = new Set<string>(DEFAULT_GOOGLE_APPS_ORDER);
+  const cleaned: VisibleGoogleWorkspaceAppKey[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (
+        typeof item === 'string' &&
+        validSet.has(item) &&
+        !cleaned.includes(item as VisibleGoogleWorkspaceAppKey)
+      ) {
+        cleaned.push(item as VisibleGoogleWorkspaceAppKey);
+      }
+    }
+  }
+  for (const key of DEFAULT_GOOGLE_APPS_ORDER) {
+    if (!cleaned.includes(key)) {
+      cleaned.push(key);
+    }
+  }
+  return cleaned;
+}
+
+function loadGoogleAppsOrder(workspaceId?: string | null): VisibleGoogleWorkspaceAppKey[] {
+  try {
+    const keysToTry = workspaceId
+      ? [`${GOOGLE_APPS_ORDER_STORAGE_KEY}_${workspaceId}`, GOOGLE_APPS_ORDER_STORAGE_KEY]
+      : [GOOGLE_APPS_ORDER_STORAGE_KEY];
+    for (const storageKey of keysToTry) {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        return sanitizeGoogleAppsOrder(JSON.parse(saved));
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return [...DEFAULT_GOOGLE_APPS_ORDER];
+}
+
+function saveGoogleAppsOrder(
+  order: VisibleGoogleWorkspaceAppKey[],
+  workspaceId?: string | null
+): void {
+  try {
+    const serialized = JSON.stringify(order);
+    localStorage.setItem(GOOGLE_APPS_ORDER_STORAGE_KEY, serialized);
+    if (workspaceId) {
+      localStorage.setItem(`${GOOGLE_APPS_ORDER_STORAGE_KEY}_${workspaceId}`, serialized);
+    }
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
 export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
   value,
   onChange,
@@ -96,6 +158,11 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     title: string;
     message: string;
   } | null>(null);
+  const [appOrder, setAppOrder] = useState<VisibleGoogleWorkspaceAppKey[]>(() =>
+    loadGoogleAppsOrder(workspaceId)
+  );
+  const [draggedAppKey, setDraggedAppKey] = useState<VisibleGoogleWorkspaceAppKey | null>(null);
+  const [dragOverAppKey, setDragOverAppKey] = useState<VisibleGoogleWorkspaceAppKey | null>(null);
 
   const valueRef = useRef<GoogleWorkspaceConfig | undefined>(value);
   valueRef.current = value;
@@ -105,6 +172,49 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
   useEffect(() => {
     setResolvedWorkspaceId(workspaceId || null);
   }, [workspaceId]);
+
+  useEffect(() => {
+    if (resolvedWorkspaceId) {
+      setAppOrder(loadGoogleAppsOrder(resolvedWorkspaceId));
+    }
+  }, [resolvedWorkspaceId]);
+
+  const updateAppOrder = useCallback(
+    (nextOrder: VisibleGoogleWorkspaceAppKey[]) => {
+      const sanitized = sanitizeGoogleAppsOrder(nextOrder);
+      setAppOrder(sanitized);
+      saveGoogleAppsOrder(sanitized, resolvedWorkspaceId || workspaceId);
+    },
+    [resolvedWorkspaceId, workspaceId]
+  );
+
+  const handleDropApp = useCallback(
+    (targetKey: VisibleGoogleWorkspaceAppKey) => {
+      if (!draggedAppKey || draggedAppKey === targetKey) {
+        setDraggedAppKey(null);
+        setDragOverAppKey(null);
+        return;
+      }
+      const fromIdx = appOrder.indexOf(draggedAppKey);
+      const toIdx = appOrder.indexOf(targetKey);
+      if (fromIdx === -1 || toIdx === -1) {
+        setDraggedAppKey(null);
+        setDragOverAppKey(null);
+        return;
+      }
+      const next = [...appOrder];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      updateAppOrder(next);
+      setDraggedAppKey(null);
+      setDragOverAppKey(null);
+    },
+    [appOrder, draggedAppKey, updateAppOrder]
+  );
+
+  const isCustomOrder = appOrder.some(
+    (key, idx) => key !== DEFAULT_GOOGLE_APPS_ORDER[idx]
+  );
 
   const applyConnectionsToParent = useCallback(
     (
@@ -139,55 +249,12 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     };
   };
 
-  const driveState = getConnectionDerivedState('google_drive');
-  const docsState = getConnectionDerivedState('google_docs');
   const sheetsState = getConnectionDerivedState('google_sheets_service');
 
-  const createResourcesUpdatedHandler = useCallback(
-    (service: GoogleResourceServiceKey) => (activeResourceIds: string[]) => {
+  const handleSheetsResourcesUpdated = useCallback(
+    (activeResourceIds: string[]) => {
       if (!onChangeRef.current) return;
       const activeSet = new Set(activeResourceIds);
-
-      if (service === 'google_drive') {
-        const currentDrive = valueRef.current?.drive;
-        if (!currentDrive || !Array.isArray(currentDrive.selectedResourceIds)) {
-          return;
-        }
-        const pruned = currentDrive.selectedResourceIds.filter((id) =>
-          activeSet.has(id)
-        );
-        if (pruned.length !== currentDrive.selectedResourceIds.length) {
-          onChangeRef.current({
-            ...(valueRef.current || {}),
-            drive: {
-              ...currentDrive,
-              selectedResourceIds: pruned,
-            },
-          });
-        }
-        return;
-      }
-
-      if (service === 'google_docs') {
-        const currentDocs = valueRef.current?.docs;
-        if (!currentDocs || !Array.isArray(currentDocs.selectedResourceIds)) {
-          return;
-        }
-        const pruned = currentDocs.selectedResourceIds.filter((id) =>
-          activeSet.has(id)
-        );
-        if (pruned.length !== currentDocs.selectedResourceIds.length) {
-          onChangeRef.current({
-            ...(valueRef.current || {}),
-            docs: {
-              ...currentDocs,
-              selectedResourceIds: pruned,
-            },
-          });
-        }
-        return;
-      }
-
       const currentSheets = valueRef.current?.sheets;
       if (!currentSheets || !Array.isArray(currentSheets.selectedResourceIds)) {
         return;
@@ -208,41 +275,6 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     []
   );
 
-  const handleDriveResourcesUpdated = useCallback(
-    createResourcesUpdatedHandler('google_drive'),
-    [createResourcesUpdatedHandler]
-  );
-  const handleDocsResourcesUpdated = useCallback(
-    createResourcesUpdatedHandler('google_docs'),
-    [createResourcesUpdatedHandler]
-  );
-  const handleSheetsResourcesUpdated = useCallback(
-    createResourcesUpdatedHandler('google_sheets_service'),
-    [createResourcesUpdatedHandler]
-  );
-
-  const driveResources = useGoogleSelectedResources({
-    service: 'google_drive',
-    workspaceId: driveState.workspaceId,
-    connectionId: driveState.connectionId,
-    status: driveState.status,
-    accountEmail: driveState.accountEmail,
-    connectionScopes: driveState.scopes,
-    agentId,
-    onResourcesUpdated: handleDriveResourcesUpdated,
-  });
-
-  const docsResources = useGoogleSelectedResources({
-    service: 'google_docs',
-    workspaceId: docsState.workspaceId,
-    connectionId: docsState.connectionId,
-    status: docsState.status,
-    accountEmail: docsState.accountEmail,
-    connectionScopes: docsState.scopes,
-    agentId,
-    onResourcesUpdated: handleDocsResourcesUpdated,
-  });
-
   const sheetsResources = useGoogleSelectedResources({
     service: 'google_sheets_service',
     workspaceId: sheetsState.workspaceId,
@@ -254,12 +286,9 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     onResourcesUpdated: handleSheetsResourcesUpdated,
   });
 
-  const resourceHooksByService: Record<
-    GoogleResourceServiceKey,
-    UseGoogleSelectedResourcesReturn
+  const resourceHooksByService: Partial<
+    Record<GoogleResourceServiceKey, UseGoogleSelectedResourcesReturn>
   > = {
-    google_drive: driveResources,
-    google_docs: docsResources,
     google_sheets_service: sheetsResources,
   };
 
@@ -271,7 +300,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     if (removed) {
       setResourceToRemove(null);
     }
-  }, [resourceToRemove, driveResources, docsResources, sheetsResources]);
+  }, [resourceToRemove, sheetsResources]);
 
   // Close confirmation modal on Escape key when not actively disconnecting
   useEffect(() => {
@@ -319,7 +348,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
               'Google Workspace authorization could not be completed.';
             setOauthDiagnosticError({
               appName: callbackRes.serviceLabel || 'Google Workspace',
-              service: callbackRes.service || 'gmail',
+              service: callbackRes.service || 'google_sheets_service',
               title: `${callbackRes.serviceLabel || 'Google Workspace'} Connection Error`,
               message: errMessage,
             });
@@ -396,47 +425,23 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
     };
   };
 
-  const apps: Array<{
-    key: GoogleWorkspaceUiKey;
-    service: GoogleWorkspaceServiceIdentifier;
-    name: string;
-    logo: React.FC<{ className?: string }>;
-    description: string;
-    status: GoogleWorkspaceIntegrationStatus;
-    isConnected: boolean;
-    connectionId?: string;
-    workspaceId: string | null;
-    email?: string;
-    lastError?: string | null;
-  }> = [
+  const appsByKey: Record<
+    VisibleGoogleWorkspaceAppKey,
     {
-      key: 'gmail',
-      name: 'Gmail',
-      logo: GmailLogo,
-      description:
-        'Send automated booking confirmations, draft replies to client inquiries, and read inbound requests.',
-      ...getAppRecordState('gmail'),
-      isConnected: getAppRecordState('gmail').status === 'connected',
-    },
-    {
-      key: 'drive',
-      name: 'Google Drive',
-      logo: GoogleDriveLogo,
-      description:
-        'Store shared client assets, access product catalogs and media folders, and archive generated receipts.',
-      ...getAppRecordState('drive'),
-      isConnected: getAppRecordState('drive').status === 'connected',
-    },
-    {
-      key: 'docs',
-      name: 'Google Docs',
-      logo: GoogleDocsLogo,
-      description:
-        'Read standard operating procedures, extract policy guidelines, and generate formatted agreements.',
-      ...getAppRecordState('docs'),
-      isConnected: getAppRecordState('docs').status === 'connected',
-    },
-    {
+      key: VisibleGoogleWorkspaceAppKey;
+      service: GoogleWorkspaceServiceIdentifier;
+      name: string;
+      logo: React.FC<{ className?: string }>;
+      description: string;
+      status: GoogleWorkspaceIntegrationStatus;
+      isConnected: boolean;
+      connectionId?: string;
+      workspaceId: string | null;
+      email?: string;
+      lastError?: string | null;
+    }
+  > = {
+    sheets: {
       key: 'sheets',
       name: 'Google Sheets',
       logo: GoogleSheetsLogo,
@@ -445,7 +450,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
       ...getAppRecordState('sheets'),
       isConnected: getAppRecordState('sheets').status === 'connected',
     },
-    {
+    calendar: {
       key: 'calendar',
       name: 'Google Calendar',
       logo: GoogleCalendarLogo,
@@ -454,63 +459,15 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
       ...getAppRecordState('calendar'),
       isConnected: getAppRecordState('calendar').status === 'connected',
     },
-  ];
+  };
+
+  const apps = appOrder.map((key) => appsByKey[key]);
 
   const connectedCount = apps.filter((app) => app.isConnected).length;
 
   const handleToggleAgentResource = useCallback(
-    (service: GoogleResourceServiceKey, resourceId: string) => {
+    (_service: GoogleResourceServiceKey, resourceId: string) => {
       if (!onChangeRef.current) return;
-
-      if (service === 'google_drive') {
-        const activeIds = driveResources.resources.map((r) => r.id);
-        const currentSelected = Array.isArray(
-          valueRef.current?.drive?.selectedResourceIds
-        )
-          ? valueRef.current!.drive!.selectedResourceIds!
-          : activeIds;
-
-        const nextSelected = currentSelected.includes(resourceId)
-          ? currentSelected.filter((id) => id !== resourceId)
-          : [...currentSelected, resourceId];
-
-        onChangeRef.current({
-          ...(valueRef.current || {}),
-          drive: {
-            ...(valueRef.current?.drive || {
-              enabled: driveState.status === 'connected',
-              status: driveState.status,
-            }),
-            selectedResourceIds: nextSelected,
-          },
-        });
-        return;
-      }
-
-      if (service === 'google_docs') {
-        const activeIds = docsResources.resources.map((r) => r.id);
-        const currentSelected = Array.isArray(
-          valueRef.current?.docs?.selectedResourceIds
-        )
-          ? valueRef.current!.docs!.selectedResourceIds!
-          : activeIds;
-
-        const nextSelected = currentSelected.includes(resourceId)
-          ? currentSelected.filter((id) => id !== resourceId)
-          : [...currentSelected, resourceId];
-
-        onChangeRef.current({
-          ...(valueRef.current || {}),
-          docs: {
-            ...(valueRef.current?.docs || {
-              enabled: docsState.status === 'connected',
-              status: docsState.status,
-            }),
-            selectedResourceIds: nextSelected,
-          },
-        });
-        return;
-      }
 
       const activeIds = sheetsResources.resources.map((r) => r.id);
       const currentSelected = Array.isArray(
@@ -536,14 +493,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
         },
       });
     },
-    [
-      driveResources.resources,
-      docsResources.resources,
-      sheetsResources.resources,
-      driveState.status,
-      docsState.status,
-      sheetsState.status,
-    ]
+    [sheetsResources.resources, sheetsState.status]
   );
 
   const handleConnect = async (
@@ -693,16 +643,16 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                 {connectedCount > 0 ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     <CheckCircle2 className="size-3" />
-                    <span>{connectedCount}/5 Connected</span>
+                    <span>{connectedCount}/{apps.length} Connected</span>
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
-                    {isLoadingStatus ? 'Checking status…' : '5 Tools Available'}
+                    {isLoadingStatus ? 'Checking status…' : `${apps.length} Tools Available`}
                   </span>
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Automate Gmail, Google Drive, Google Docs, Google Sheets, and Google Calendar directly within your agent workflows.
+                Automate Google Sheets and Google Calendar directly within your agent workflows.
               </p>
             </div>
           </div>
@@ -754,21 +704,39 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
               </div>
             )}
 
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                <GripVertical className="size-3.5 shrink-0 opacity-70" />
+                <span>Drag apps to arrange your preferred order</span>
+              </span>
+              {isCustomOrder && (
+                <button
+                  type="button"
+                  onClick={() => updateAppOrder([...DEFAULT_GOOGLE_APPS_ORDER])}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer shrink-0"
+                >
+                  <RotateCcw className="size-3" />
+                  <span>Reset order</span>
+                </button>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 gap-3">
               {apps.map((app) => {
                 const LogoComponent = app.logo;
+                const isDragged = draggedAppKey === app.key;
+                const isDragOver =
+                  dragOverAppKey === app.key && draggedAppKey !== app.key;
                 const isThisConnecting = connectingService === app.service;
                 const isThisDisconnecting = disconnectingService === app.service;
                 const isBusy =
                   connectingService !== null || disconnectingService !== null;
                 const resourceServiceKey: GoogleResourceServiceKey | null =
-                  app.service === 'google_drive' ||
-                  app.service === 'google_docs' ||
                   app.service === 'google_sheets_service'
                     ? app.service
                     : null;
                 const serviceHook = resourceServiceKey
-                  ? resourceHooksByService[resourceServiceKey]
+                  ? resourceHooksByService[resourceServiceKey] || null
                   : null;
 
                 let resourceStatusBadge: {
@@ -782,36 +750,62 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                       tone: 'amber',
                     };
                   } else if (serviceHook.activeCount > 0) {
-                    if (resourceServiceKey === 'google_drive') {
-                      resourceStatusBadge = {
-                        label: 'Resources selected',
-                        tone: 'emerald',
-                      };
-                    } else if (resourceServiceKey === 'google_docs') {
-                      resourceStatusBadge = {
-                        label: `${serviceHook.activeCount} ${
-                          serviceHook.activeCount === 1 ? 'Doc' : 'Docs'
-                        } selected`,
-                        tone: 'emerald',
-                      };
-                    } else {
-                      resourceStatusBadge = {
-                        label: `${serviceHook.activeCount} ${
-                          serviceHook.activeCount === 1 ? 'Sheet' : 'Sheets'
-                        } selected`,
-                        tone: 'emerald',
-                      };
-                    }
+                    resourceStatusBadge = {
+                      label: `${serviceHook.activeCount} ${
+                        serviceHook.activeCount === 1 ? 'Sheet' : 'Sheets'
+                      } selected`,
+                      tone: 'emerald',
+                    };
                   }
                 }
 
                 return (
                   <div
                     key={app.key}
-                    className="rounded-xl border border-border bg-card p-4 shadow-2xs hover:border-border/80 transition-all"
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedAppKey(app.key);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', app.key);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dragOverAppKey !== app.key) {
+                        setDragOverAppKey(app.key);
+                      }
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        if (dragOverAppKey === app.key) {
+                          setDragOverAppKey(null);
+                        }
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDropApp(app.key);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedAppKey(null);
+                      setDragOverAppKey(null);
+                    }}
+                    className={`rounded-xl border bg-card p-4 shadow-2xs transition-all ${
+                      isDragOver
+                        ? 'border-primary ring-2 ring-primary/20'
+                        : 'border-border hover:border-border/80'
+                    } ${isDragged ? 'opacity-50 scale-[0.99]' : 'opacity-100'}`}
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start gap-3">
+                      <div className="flex items-start gap-2.5">
+                        {/* Drag Handle */}
+                        <div
+                          title={`Drag to reorder ${app.name}`}
+                          className="p-1 text-muted-foreground/70 hover:text-foreground cursor-grab active:cursor-grabbing rounded-md hover:bg-muted/60 transition-colors shrink-0 mt-0.5 sm:mt-0 self-center"
+                        >
+                          <GripVertical className="size-4" />
+                        </div>
+
                         <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-white dark:bg-muted p-2 shrink-0 mt-0.5 sm:mt-0 shadow-2xs">
                           <LogoComponent className="size-5" />
                         </div>
@@ -962,7 +956,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                       </div>
                     </div>
 
-                    {/* Independent Authorized Resources Section for Drive, Docs, and Sheets */}
+                    {/* Independent Authorized Resources Section for Google Sheets */}
                     {resourceServiceKey && serviceHook && (
                       <AuthorizedResourcesSection
                         service={resourceServiceKey}
@@ -981,11 +975,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                         isBusyConnectingOrDisconnecting={isBusy}
                         selectedAgentResourceIds={
                           onChange
-                            ? resourceServiceKey === 'google_drive'
-                              ? value?.drive?.selectedResourceIds
-                              : resourceServiceKey === 'google_docs'
-                              ? value?.docs?.selectedResourceIds
-                              : value?.sheets?.selectedResourceIds
+                            ? value?.sheets?.selectedResourceIds
                             : undefined
                         }
                         onToggleAgentResource={

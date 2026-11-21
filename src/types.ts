@@ -1,45 +1,10 @@
 export type PlatformType = 'whatsapp' | 'instagram' | 'tiktok' | 'call' | 'messenger';
 
-export type WorkspaceRole = 'owner' | 'admin' | 'member';
-
-export interface WorkspaceMembership {
+export interface OwnerWorkspace {
   id: string;
   name: string;
-  role: WorkspaceRole;
   ownerUserId?: string;
   status?: string;
-}
-
-export type WorkspaceInviteStatus =
-  | 'pending'
-  | 'accepted'
-  | 'revoked'
-  | 'expired'
-  | string;
-
-export interface WorkspaceInvite {
-  id: string;
-  workspace_id?: string;
-  email: string;
-  status: WorkspaceInviteStatus;
-  role?: string;
-  user_id?: string;
-  full_name?: string;
-  avatar_url?: string;
-  created_at?: string;
-  expires_at?: string;
-  accepted_at?: string | null;
-  revoked_at?: string | null;
-}
-
-export interface WorkspaceMember {
-  id: string;
-  userId?: string;
-  name?: string;
-  email: string;
-  role: WorkspaceRole;
-  avatarUrl?: string;
-  joinedAt?: string | null;
 }
 
 export interface User {
@@ -156,7 +121,6 @@ export interface GoogleSheetColumn {
 export type GoogleSheetRow = Record<string, any>;
 
 export type GoogleWorkspaceServiceIdentifier =
-  | 'gmail'
   | 'google_drive'
   | 'google_docs'
   | 'google_sheets_service'
@@ -248,7 +212,6 @@ export interface GooglePickerTokenPayload {
 }
 
 export interface GoogleWorkspaceConfig {
-  gmail?: GoogleWorkspaceAppConfig;
   drive?: GoogleWorkspaceAppConfig;
   docs?: GoogleWorkspaceAppConfig;
   sheets?: GoogleSheetToolConfig;

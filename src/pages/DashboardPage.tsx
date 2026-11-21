@@ -7,86 +7,12 @@ import { ChannelConnection } from '../types';
 interface DashboardPageProps {
   connections: ChannelConnection[];
   onNavigate: (path: string) => void;
-  isTeamMember?: boolean;
-  workspaceName?: string;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
   connections,
   onNavigate,
-  isTeamMember = false,
-  workspaceName,
 }) => {
-  if (isTeamMember) {
-    return (
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-4xl font-normal tracking-tight text-foreground">
-            Channels
-          </h1>
-          <p className="mt-2 text-muted-foreground">
-            Connected channels in {workspaceName || 'this workspace'}.
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          {connections.length === 0 ? (
-            <div className="surface-card p-8 text-center text-sm text-muted-foreground">
-              No channels are connected to this workspace yet.
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {connections.map((conn) => {
-                const isConnected = conn.status === 'connected';
-                return (
-                  <div
-                    key={conn.id}
-                    className="surface-card flex flex-wrap items-center justify-between gap-4 p-5"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="size-10 rounded-xl bg-accent flex items-center justify-center shrink-0">
-                        <ChannelIcon channel={conn.channel} size={20} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground">
-                            {conn.display_name}
-                          </span>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              isConnected
-                                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                : 'bg-muted text-muted-foreground'
-                            }`}
-                          >
-                            <span
-                              className={`size-1.5 rounded-full ${
-                                isConnected ? 'bg-emerald-500' : 'bg-muted-foreground'
-                              }`}
-                            />
-                            {conn.status || 'connected'}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{conn.handle}</span>
-                          <span>•</span>
-                          <span>
-                            {conn.agents?.name
-                              ? `Answering: ${conn.agents.name}`
-                              : 'No agent assigned'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-12">

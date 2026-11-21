@@ -20,7 +20,6 @@ import { TakeoverSlider } from '../components/TakeoverSlider';
 interface InboxPageProps {
   conversations: Conversation[];
   onUpdateConversation: (updated: Conversation) => void;
-  isTeamMember?: boolean;
 }
 
 type InboxFilterType = 'all' | 'unread' | 'human_needed' | 'human_handling';
@@ -64,7 +63,6 @@ export function renderConversationStatusBadge(status: ConversationStatus) {
 export const InboxPage: React.FC<InboxPageProps> = ({
   conversations,
   onUpdateConversation,
-  isTeamMember = false,
 }) => {
   // Frontend status/unread/reason overrides so status transitions work seamlessly
   const [statusOverrides, setStatusOverrides] = useState<
@@ -107,16 +105,8 @@ export const InboxPage: React.FC<InboxPageProps> = ({
     displayConversations[0]?.id || ''
   );
   const [messageText, setMessageText] = useState('');
-  const [sendAsRole, setSendAsRole] = useState<'customer' | 'human'>(() =>
-    isTeamMember ? 'human' : 'customer'
-  );
+  const [sendAsRole, setSendAsRole] = useState<'customer' | 'human'>('customer');
   const [sending, setSending] = useState(false);
-
-  useEffect(() => {
-    if (isTeamMember) {
-      setSendAsRole('human');
-    }
-  }, [isTeamMember]);
 
   // Live filter counts
   const unreadCount = useMemo(
@@ -330,7 +320,7 @@ export const InboxPage: React.FC<InboxPageProps> = ({
     setSending(true);
 
     const nowIso = new Date().toISOString();
-    const effectiveSender: 'customer' | 'human' = isTeamMember ? 'human' : sendAsRole;
+    const effectiveSender: 'customer' | 'human' = sendAsRole;
     const newMsg = {
       id: `msg_${Date.now()}`,
       sender: effectiveSender,
@@ -867,35 +857,33 @@ export const InboxPage: React.FC<InboxPageProps> = ({
                 onSubmit={handleSendMessage}
                 className="border-t border-border p-3 bg-background"
               >
-                {!isTeamMember && (
-                  <div className="flex items-center justify-between gap-2 mb-2 px-1">
-                    <span className="text-[11px] text-muted-foreground">Send as:</span>
-                    <div className="flex rounded-md border border-border p-0.5 bg-secondary/30">
-                      <button
-                        type="button"
-                        onClick={() => setSendAsRole('customer')}
-                        className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
-                          sendAsRole === 'customer'
-                            ? 'bg-background font-medium text-foreground shadow-xs'
-                            : 'text-muted-foreground'
-                        }`}
-                      >
-                        Customer
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSendAsRole('human')}
-                        className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
-                          sendAsRole === 'human'
-                            ? 'bg-background font-medium text-foreground shadow-xs'
-                            : 'text-muted-foreground'
-                        }`}
-                      >
-                        Staff / Human
-                      </button>
-                    </div>
+                <div className="flex items-center justify-between gap-2 mb-2 px-1">
+                  <span className="text-[11px] text-muted-foreground">Send as:</span>
+                  <div className="flex rounded-md border border-border p-0.5 bg-secondary/30">
+                    <button
+                      type="button"
+                      onClick={() => setSendAsRole('customer')}
+                      className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
+                        sendAsRole === 'customer'
+                          ? 'bg-background font-medium text-foreground shadow-xs'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      Customer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSendAsRole('human')}
+                      className={`px-2 py-0.5 text-[11px] rounded transition-colors cursor-pointer ${
+                        sendAsRole === 'human'
+                          ? 'bg-background font-medium text-foreground shadow-xs'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      Staff / Human
+                    </button>
                   </div>
-                )}
+                </div>
 
                 <div className="flex items-center gap-2">
                   <input

@@ -1,41 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { AlertCircle, ArrowLeft, Loader2, CheckCircle2, UserPlus } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
 import { User } from '../types';
 import { apiFetch } from '../lib/api';
 import { supabase } from '../lib/supabaseClient';
-import { PENDING_INVITE_TOKEN_STORAGE_KEY } from '../lib/supabaseService';
 
 interface AuthPageProps {
   onSignInSuccess: (user: User) => void;
   onNavigate: (path: string) => void;
 }
 
-function resolvePendingInviteToken(): string {
-  if (typeof window === 'undefined') return '';
-  const params = new URLSearchParams(window.location.search);
-  const queryToken = (
-    params.get('invite_token') ||
-    params.get('token') ||
-    ''
-  ).trim();
-  if (queryToken) {
-    try {
-      sessionStorage.setItem(PENDING_INVITE_TOKEN_STORAGE_KEY, queryToken);
-    } catch {
-      // ignore storage failures
-    }
-    return queryToken;
-  }
-  try {
-    return (sessionStorage.getItem(PENDING_INVITE_TOKEN_STORAGE_KEY) || '').trim();
-  } catch {
-    return '';
-  }
-}
-
 export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate }) => {
-  const [inviteToken] = useState<string>(() => resolvePendingInviteToken());
   const [mode, setMode] = useState<'signin' | 'signup' | 'forgot_password'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -56,7 +31,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resetEmailSent, setResetEmailSent] = useState(false);
-  const [passwordUpdatedBanner, setPasswordUpdatedBanner] = useState<boolean>(() => {
+  const [passwordUpdatedBanner] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       return params.get('reset') === 'success';
@@ -64,27 +39,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
     return false;
   });
 
-  const acceptInvitePath = inviteToken
-    ? `/accept-invite?invite_token=${encodeURIComponent(inviteToken)}`
-    : '/dashboard';
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    let updated = false;
-    if (inviteToken && !params.get('invite_token')) {
-      params.set('invite_token', inviteToken);
-      updated = true;
-    }
     if (params.get('reset') === 'success') {
       params.delete('reset');
-      updated = true;
-    }
-    if (updated) {
       const query = params.toString();
       window.history.replaceState({}, '', query ? `/auth?${query}` : '/auth');
     }
-  }, [inviteToken]);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,7 +90,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
       const endpoint = mode === 'signup' ? '/api/auth/register' : '/api/auth/login';
       const emailRedirectTo =
         typeof window !== 'undefined'
-          ? `${window.location.origin}${acceptInvitePath}`
+          ? `${window.location.origin}/dashboard`
           : undefined;
       const res = await apiFetch(endpoint, {
         method: 'POST',
@@ -149,9 +112,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
         }
         if (data.needsEmailConfirmation) {
           toast.success(
-            inviteToken
-              ? 'Account created! Verify your email via the link in your inbox to complete joining the workspace.'
-              : 'Account created! Please check your email inbox to confirm your account, then sign in.',
+            'Account created! Please check your email inbox to confirm your account, then sign in.',
             { duration: 7000 }
           );
           setMode('signin');
@@ -159,7 +120,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
         } else {
           onSignInSuccess(data.user);
           toast.success(mode === 'signup' ? 'Account created successfully!' : 'Welcome back!');
-          onNavigate(acceptInvitePath);
+          onNavigate('/dashboard');
         }
       } else {
         const errText = data.error || (mode === 'signup' ? 'Registration failed' : 'Invalid email or password');
@@ -181,7 +142,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
 
     try {
       if (supabase) {
-        const redirectTo = `${window.location.origin}${acceptInvitePath}`;
+        const redirectTo = `${window.location.origin}/dashboard`;
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
@@ -205,7 +166,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
         localStorage.setItem('zivofly_token', 'demo_token_123');
         onSignInSuccess(fallbackUser);
         toast.success('Signed in with Google');
-        onNavigate(acceptInvitePath);
+        onNavigate('/dashboard');
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Google sign in failed');
@@ -259,15 +220,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSignInSuccess, onNavigate 
                   ? 'Sign in to manage your agents and customer conversations.'
                   : 'Start automating your customer conversations with autonomous AI agents.'}
               </p>
-            </div>
-          )}
-
-          {inviteToken && (
-            <div className="mt-4 rounded-xl border border-primary/30 bg-primary/10 p-3 text-xs text-foreground flex items-start gap-2">
-              <UserPlus className="size-4 text-primary shrink-0 mt-0.5" />
-              <span>
-                Sign in or create an account with the verified email address that received the workspace invitation.
-              </span>
             </div>
           )}
 

@@ -10,8 +10,6 @@ import {
 import { ChannelIcon } from '../components/ChannelIcon';
 import {
   GoogleWorkspaceLogo,
-  GmailLogo,
-  GoogleDriveLogo,
   GoogleDocsLogo,
   GoogleSheetsLogo,
   GoogleCalendarLogo,
@@ -21,31 +19,9 @@ import { PublicFooter } from '../components/PublicFooter';
 interface LandingPageProps {
   onNavigate: (path: string) => void;
   isAuthenticated: boolean;
-  isTeamMember?: boolean;
 }
 
 const GOOGLE_TOOLS = [
-  {
-    name: 'Gmail',
-    logo: GmailLogo,
-    summary:
-      'Send booking confirmations, draft client replies, and read inbound requests linked to your customer workflows.',
-    control: 'Independent OAuth connection',
-  },
-  {
-    name: 'Google Drive',
-    logo: GoogleDriveLogo,
-    summary:
-      'Share PDFs, product sheets, images, Word/Excel files, and archives explicitly selected through Google Picker.',
-    control: 'File-by-file Picker authorization',
-  },
-  {
-    name: 'Google Docs',
-    logo: GoogleDocsLogo,
-    summary:
-      'Let agents reference your selected standard operating procedures, FAQs, and policy guidelines.',
-    control: 'Native Google Docs only',
-  },
   {
     name: 'Google Sheets',
     logo: GoogleSheetsLogo,
@@ -60,16 +36,22 @@ const GOOGLE_TOOLS = [
       'Check real-time slot availability, schedule customer appointments, and create calendar invites.',
     control: 'Independent OAuth connection',
   },
+  {
+    name: 'Google Docs (Knowledge Base)',
+    logo: GoogleDocsLogo,
+    summary:
+      'Select specific native Google Docs with read-only permissions inside your Knowledge Base using Google Picker.',
+    control: 'Read-only Google Docs selection',
+  },
 ];
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onNavigate,
   isAuthenticated,
-  isTeamMember = false,
 }) => {
-  const ctaPath = isAuthenticated ? (isTeamMember ? '/inbox' : '/dashboard') : '/auth';
+  const ctaPath = isAuthenticated ? '/dashboard' : '/auth';
   const channelCardPath = (channel: string) =>
-    isAuthenticated ? (isTeamMember ? '/dashboard' : `/connect/${channel}`) : '/auth';
+    isAuthenticated ? `/connect/${channel}` : '/auth';
 
   return (
     <div className="hero-glow min-h-[calc(100vh-4rem)] flex flex-col">
@@ -242,7 +224,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {GOOGLE_TOOLS.map((tool) => {
               const ToolLogo = tool.logo;
               return (
@@ -276,7 +258,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <FolderCheck className="size-4 text-primary shrink-0 mt-0.5" />
               <span>
                 <strong className="text-foreground">Strict per-service separation:</strong>{' '}
-                Drive, Docs, and Sheets each maintain separate OAuth
+                Google Docs and Google Sheets each maintain separate OAuth
                 connections and explicit Google Picker file selections.
                 Review full details in our{' '}
                 <button

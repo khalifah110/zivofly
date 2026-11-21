@@ -41,7 +41,6 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
     GOOGLE_SHEET_TEMPLATES[0].config
   );
   const [googleWorkspaceConfig, setGoogleWorkspaceConfig] = useState<GoogleWorkspaceConfig>({
-    gmail: { enabled: false, status: 'disconnected' },
     drive: { enabled: false, status: 'disconnected' },
     docs: { enabled: false, status: 'disconnected' },
     sheets: GOOGLE_SHEET_TEMPLATES[0].config,

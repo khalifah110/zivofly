@@ -6,14 +6,10 @@ import {
   Play,
   Pause,
   Trash2,
-  RotateCcw,
   CheckCircle2,
   ShieldCheck,
-  Volume2,
   FileAudio,
-  AlertCircle,
-  ChevronDown,
-  ChevronUp,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CustomVoiceConfig } from '../types';
@@ -27,12 +23,11 @@ interface CustomAgentVoiceSectionProps {
 export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = ({
   value,
   onChange,
-  compact = false,
 }) => {
-  const [isOpen, setIsOpen] = useState<boolean>(() => Boolean(value?.enabled || value?.audioUrl));
+  const [isEnabled, setIsEnabled] = useState<boolean>(() => Boolean(value?.enabled && value?.authorized));
   const [authorized, setAuthorized] = useState<boolean>(() => Boolean(value?.authorized));
+  const [showAuthPopup, setShowAuthPopup] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'record' | 'upload'>('record');
-  const [voiceName, setVoiceName] = useState<string>(value?.voiceName || 'My Custom Voice');
 
   // Audio Recording states
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -50,6 +45,7 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<number | null>(null);
+  const recordingSecondsRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -57,24 +53,34 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
   // Sync state if external value changes
   useEffect(() => {
     if (value) {
+      setIsEnabled(Boolean(value.enabled && value.authorized));
       setAuthorized(Boolean(value.authorized));
-      if (value.audioUrl) {
-        setRecordedBlobUrl(value.audioUrl);
-      }
-      if (value.fileName) {
-        setRecordedFileName(value.fileName);
-      }
-      if (value.fileSize) {
-        setRecordedFileSize(value.fileSize);
-      }
-      if (value.duration) {
-        setAudioDuration(value.duration);
-      }
-      if (value.voiceName) {
-        setVoiceName(value.voiceName);
-      }
+      setRecordedBlobUrl(value.audioUrl || null);
+      setRecordedFileName(value.fileName || null);
+      setRecordedFileSize(value.fileSize || null);
+      setAudioDuration(value.duration || 0);
+    } else {
+      setIsEnabled(false);
+      setAuthorized(false);
+      setShowAuthPopup(false);
+      setRecordedBlobUrl(null);
+      setRecordedFileName(null);
+      setRecordedFileSize(null);
+      setAudioDuration(0);
     }
   }, [value]);
+
+  // Close authorization popup on Escape key
+  useEffect(() => {
+    if (!showAuthPopup) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowAuthPopup(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAuthPopup]);
 
   // Clean up recording timer and streams on unmount
   useEffect(() => {
@@ -91,40 +97,90 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
     };
   }, []);
 
-  const handleToggleOpen = () => {
-    const nextState = !isOpen;
-    setIsOpen(nextState);
-    if (!nextState && !recordedBlobUrl) {
-      // If closing without an audio configured, disable
-      onChange(undefined);
+  const stopActiveRecordingAndPlayback = () => {
+    if (timerIntervalRef.current) {
+      window.clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    setIsRecording(false);
+    if (audioPlayerRef.current && !audioPlayerRef.current.paused) {
+      audioPlayerRef.current.pause();
+      setIsPlaying(false);
     }
   };
 
-  const handleAuthorizationChange = (checked: boolean) => {
-    setAuthorized(checked);
-    if (!checked) {
-      toast.info('Voice authorization unchecked. The agent cannot use your voice without authorization.');
-      if (value) {
+  const handleToggleEnabled = () => {
+    if (isEnabled) {
+      // Turning OFF
+      setIsEnabled(false);
+      setShowAuthPopup(false);
+      stopActiveRecordingAndPlayback();
+      if (recordedBlobUrl) {
         onChange({
-          ...value,
-          authorized: false,
           enabled: false,
+          authorized,
+          audioUrl: recordedBlobUrl,
+          fileName: recordedFileName || undefined,
+          fileSize: recordedFileSize || undefined,
+          duration: audioDuration || undefined,
+          sourceType: value?.sourceType || (activeTab === 'record' ? 'recorded' : 'uploaded'),
+          updatedAt: new Date().toISOString(),
         });
+      } else {
+        setAuthorized(false);
+        onChange(undefined);
       }
-    } else {
-      toast.success('Voice authorization confirmed.');
-      onChange({
-        enabled: true,
-        authorized: true,
-        voiceName: voiceName || 'My Custom Voice',
-        audioUrl: recordedBlobUrl || undefined,
-        fileName: recordedFileName || undefined,
-        fileSize: recordedFileSize || undefined,
-        duration: audioDuration || undefined,
-        sourceType: activeTab === 'record' ? 'recorded' : 'uploaded',
-        updatedAt: new Date().toISOString(),
-      });
+      return;
     }
+
+    // Turning ON: require authorization popup if not yet authorized
+    if (!authorized) {
+      setShowAuthPopup(true);
+      return;
+    }
+
+    setIsEnabled(true);
+    onChange({
+      enabled: true,
+      authorized: true,
+      audioUrl: recordedBlobUrl || undefined,
+      fileName: recordedFileName || undefined,
+      fileSize: recordedFileSize || undefined,
+      duration: audioDuration || undefined,
+      sourceType: value?.sourceType || (activeTab === 'record' ? 'recorded' : 'uploaded'),
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const handleCancelAuthPopup = () => {
+    setShowAuthPopup(false);
+  };
+
+  const handleAuthorizationChange = (checked: boolean) => {
+    if (!checked) return;
+
+    setAuthorized(true);
+    setIsEnabled(true);
+    setShowAuthPopup(false);
+    toast.success('Voice authorization confirmed.');
+    onChange({
+      enabled: true,
+      authorized: true,
+      audioUrl: recordedBlobUrl || undefined,
+      fileName: recordedFileName || undefined,
+      fileSize: recordedFileSize || undefined,
+      duration: audioDuration || undefined,
+      sourceType: value?.sourceType || (activeTab === 'record' ? 'recorded' : 'uploaded'),
+      updatedAt: new Date().toISOString(),
+    });
   };
 
   // --- Audio Recording Flow ---
@@ -164,6 +220,7 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const sizeInKb = (audioBlob.size / 1024).toFixed(1) + ' KB';
         const fallbackName = `voice-recording-${new Date().toISOString().slice(0, 10)}.webm`;
+        const recordedDuration = recordingSecondsRef.current;
 
         // Convert blob to DataURL so it persists reliably in front-end state
         const reader = new FileReader();
@@ -172,15 +229,15 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
           setRecordedBlobUrl(base64DataUrl);
           setRecordedFileName(fallbackName);
           setRecordedFileSize(sizeInKb);
+          setAudioDuration(recordedDuration);
 
           const finalConfig: CustomVoiceConfig = {
             enabled: true,
             authorized: true,
-            voiceName: voiceName || 'My Custom Voice',
             audioUrl: base64DataUrl,
             fileName: fallbackName,
             fileSize: sizeInKb,
-            duration: recordingSeconds,
+            duration: recordedDuration,
             sourceType: 'recorded',
             updatedAt: new Date().toISOString(),
           };
@@ -200,10 +257,12 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
       mediaRecorder.start(250);
       setIsRecording(true);
       setRecordingSeconds(0);
+      recordingSecondsRef.current = 0;
 
       // Start timer
       timerIntervalRef.current = window.setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
+        recordingSecondsRef.current += 1;
+        setRecordingSeconds(recordingSecondsRef.current);
       }, 1000);
     } catch (err) {
       console.error('Microphone access error:', err);
@@ -260,7 +319,6 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
         const newConfig: CustomVoiceConfig = {
           enabled: true,
           authorized: true,
-          voiceName: voiceName || file.name.replace(/\.[^/.]+$/, ''),
           audioUrl: dataUrl,
           fileName: file.name,
           fileSize: fileSizeFormatted,
@@ -317,7 +375,11 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
     setRecordedFileSize(null);
     setAudioDuration(0);
     setIsPlaying(false);
-    onChange(undefined);
+    onChange({
+      enabled: isEnabled,
+      authorized,
+      updatedAt: new Date().toISOString(),
+    });
     toast.info('Custom voice removed. Standard synthetic voices will be used.');
   };
 
@@ -342,35 +404,33 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
 
       {/* Main Container / Trigger */}
       <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-2xs transition-all">
-        {/* Header Clickable Banner */}
+        {/* Header Banner with On/Off Switch */}
         <div
-          onClick={handleToggleOpen}
-          className="p-4 flex items-center justify-between cursor-pointer hover:bg-muted/40 transition-colors select-none"
+          onClick={handleToggleEnabled}
+          className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-muted/40 transition-colors select-none"
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div
               className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                recordedBlobUrl && authorized
-                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                isEnabled
+                  ? recordedBlobUrl && authorized
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-primary/10 text-primary'
                   : 'bg-muted text-muted-foreground'
               }`}
             >
               <Mic className="w-4 h-4" />
             </div>
 
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold text-foreground">
                   Custom Agent Voice
                 </span>
-                {recordedBlobUrl && authorized ? (
+                {isEnabled && recordedBlobUrl && authorized && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
                     <CheckCircle2 className="w-3 h-3" />
                     Voice Ready
-                  </span>
-                ) : (
-                  <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-md font-medium">
-                    Optional
                   </span>
                 )}
               </div>
@@ -380,83 +440,31 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {!isOpen && !recordedBlobUrl && (
-              <span className="text-xs font-semibold text-primary px-2.5 py-1 rounded-lg bg-primary/10 hover:bg-primary/20 transition-colors">
-                + Add Voice
-              </span>
-            )}
-            <button
-              type="button"
-              className="p-1 rounded-lg text-muted-foreground hover:text-foreground"
-              aria-label={isOpen ? 'Collapse voice section' : 'Expand voice section'}
-            >
-              {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
-          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={isEnabled}
+            aria-label="Enable Custom Agent Voice"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleEnabled();
+            }}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+              isEnabled ? 'bg-primary' : 'bg-neutral-300 dark:bg-neutral-700'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                isEnabled ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
         </div>
 
-        {/* Collapsible Body */}
-        {isOpen && (
-          <div className="p-4 pt-1 border-t border-border/80 space-y-4 animate-in fade-in duration-200">
-            {/* MANDATORY CONSENT CHECKBOX SECTION */}
-            <div className="p-3.5 rounded-xl border border-amber-500/25 bg-amber-500/5 space-y-2">
-              <div className="flex items-start gap-2.5">
-                <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <div className="space-y-1 text-xs">
-                  <span className="font-semibold text-foreground block">
-                    Voice Cloning Authorization & Consent
-                  </span>
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    Under privacy and AI synthesis guidelines, we require explicit authorization before training or synthesizing any individual's voice.
-                  </p>
-                </div>
-              </div>
-
-              <label className="flex items-start gap-2.5 pt-2 border-t border-amber-500/20 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={authorized}
-                  onChange={(e) => handleAuthorizationChange(e.target.checked)}
-                  className="mt-0.5 size-4 accent-amber-600 rounded cursor-pointer shrink-0"
-                />
-                <span className="text-xs font-medium text-foreground leading-snug">
-                  By clicking this box you giving authorisation that the agent should used your voice.
-                </span>
-              </label>
-            </div>
-
-            {/* If NOT authorized, show friendly lock message */}
-            {!authorized ? (
-              <div className="p-4 rounded-xl border border-border bg-muted/30 text-center space-y-1 text-xs text-muted-foreground">
-                <AlertCircle className="w-4 h-4 mx-auto text-amber-500" />
-                <p className="font-medium text-foreground">Authorization Required</p>
-                <p className="text-[11px]">
-                  Please check the authorization box above to record your voice or upload an audio sample.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Voice Name / Label */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-foreground block">
-                    Voice Profile Name
-                  </label>
-                  <input
-                    type="text"
-                    value={voiceName}
-                    onChange={(e) => {
-                      setVoiceName(e.target.value);
-                      if (value) {
-                        onChange({ ...value, voiceName: e.target.value });
-                      }
-                    }}
-                    placeholder="e.g. My Voice - Founder Tone"
-                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-border bg-background text-foreground focus:border-primary focus:outline-none"
-                  />
-                </div>
-
-                {/* Switcher: Record vs Upload */}
+        {/* Collapsible Body (shown only after switch is ON and user checked authorization) */}
+        {isEnabled && authorized && (
+          <div className="p-4 pt-3 border-t border-border/80 space-y-4 animate-in fade-in duration-200">
+            {/* Switcher: Record vs Upload */}
                 <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
                   <button
                     type="button"
@@ -594,7 +602,7 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
                         </div>
                         <div className="truncate">
                           <span className="text-xs font-semibold text-foreground block truncate">
-                            {recordedFileName || voiceName}
+                            {recordedFileName || 'Custom Agent Voice'}
                           </span>
                           <span className="text-[10px] text-muted-foreground">
                             {recordedFileSize ? `${recordedFileSize} • ` : ''}
@@ -652,11 +660,64 @@ export const CustomAgentVoiceSection: React.FC<CustomAgentVoiceSectionProps> = (
                     </div>
                   </div>
                 )}
-              </>
-            )}
           </div>
         )}
       </div>
+
+      {/* Authorization Popup Modal */}
+      {showAuthPopup && (
+        <div
+          onClick={handleCancelAuthPopup}
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="voice-auth-modal-title"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200"
+          >
+            {/* Small Cancel 'X' Button at Top Right Corner */}
+            <button
+              type="button"
+              onClick={handleCancelAuthPopup}
+              aria-label="Cancel voice authorization"
+              className="absolute top-3 right-3 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-start gap-2.5 pr-7">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <div className="space-y-1">
+                <h4
+                  id="voice-auth-modal-title"
+                  className="text-sm font-semibold text-foreground"
+                >
+                  Voice Cloning Authorization & Consent
+                </h4>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Under privacy and AI synthesis guidelines, we require explicit authorization before training or synthesizing any individual's voice.
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-start gap-2.5 p-3.5 rounded-xl border border-amber-500/25 bg-amber-500/5 hover:bg-amber-500/10 transition-colors cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={authorized}
+                onChange={(e) => handleAuthorizationChange(e.target.checked)}
+                className="mt-0.5 size-4 accent-amber-600 rounded cursor-pointer shrink-0"
+              />
+              <span className="text-xs font-medium text-foreground leading-snug">
+                By clicking this box you giving authorisation that the agent should used your voice.
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

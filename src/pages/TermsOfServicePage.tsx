@@ -51,7 +51,7 @@ export const TermsOfServicePage: React.FC<TermsOfServicePageProps> = ({
             1. Scope of Service
           </h2>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            Zivofly provides software tools enabling businesses to configure AI conversation agents across supported messaging and voice channels (WhatsApp, Instagram, Messenger, TikTok, and phone calls), manage customer inbox handoffs, and optionally connect third-party tools including Google Workspace (Gmail, Google Drive, Google Docs, Google Sheets, and Google Calendar).
+            Zivofly provides software tools enabling businesses to configure AI conversation agents across supported messaging and voice channels (WhatsApp, Instagram, Messenger, TikTok, and phone calls), manage customer inbox handoffs, and optionally connect third-party tools including Google Workspace (Google Drive, Google Docs, Google Sheets, and Google Calendar).
           </p>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
             By creating an account or using Zivofly, you agree to these Terms of Service and acknowledge our{' '}
@@ -75,7 +75,7 @@ export const TermsOfServicePage: React.FC<TermsOfServicePageProps> = ({
           </div>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm text-muted-foreground leading-relaxed">
             <li>You must provide accurate registration information and maintain the confidentiality of your login credentials.</li>
-            <li>You are responsible for all activity occurring within your Zivofly workspace, including the actions of team members you authorize and the prompts, schedules, and knowledge sources you assign to AI agents.</li>
+            <li>You are responsible for all activity occurring within your Zivofly workspace, including the prompts, schedules, knowledge sources, and connected integrations you assign to AI agents.</li>
             <li>You must promptly notify us through our{' '}
               <button
                 type="button"

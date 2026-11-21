@@ -12,7 +12,7 @@ export const DEFAULT_HOLDING_MESSAGE =
   'Thank you for your patience. Your question has been forwarded to our team, and a member of our team will assist you shortly.';
 
 export const DEFAULT_HUMAN_HANDOFF_CONFIG: HumanHandoffConfig = {
-  enabled: true,
+  enabled: false,
   waitingTime: '30m',
   holdingMessage: DEFAULT_HOLDING_MESSAGE,
 };
@@ -123,11 +123,8 @@ export const HumanHandoffSection: React.FC<HumanHandoffSectionProps> = ({
       </div>
 
       {/* Configuration Controls */}
-      <div
-        className={`space-y-6 transition-opacity ${
-          safeValue.enabled ? 'opacity-100' : 'opacity-60'
-        }`}
-      >
+      {safeValue.enabled && (
+        <div className="space-y-6 animate-in fade-in duration-200">
         {/* B. Customer Waiting Time */}
         <div className="space-y-3">
           <div>
@@ -234,7 +231,8 @@ export const HumanHandoffSection: React.FC<HumanHandoffSectionProps> = ({
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 };

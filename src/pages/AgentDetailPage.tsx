@@ -74,6 +74,7 @@ import {
 } from '../lib/supabaseService';
 import { GoogleSheetToolSection } from '../components/GoogleSheetToolSection';
 import { GoogleWorkspaceSection } from '../components/GoogleWorkspaceSection';
+import { GoogleDocsKnowledgeSection } from '../components/GoogleDocsKnowledgeSection';
 import { Microsoft365Section } from '../components/Microsoft365Section';
 import { SalesforceSection } from '../components/SalesforceSection';
 import { HubSpotSection } from '../components/HubSpotSection';
@@ -88,7 +89,7 @@ import {
   HumanHandoffSection,
   DEFAULT_HUMAN_HANDOFF_CONFIG,
 } from '../components/HumanHandoffSection';
-import { TikTokLogo } from '../components/BrandLogos';
+import { GoogleDocsLogo, TikTokLogo } from '../components/BrandLogos';
 
 interface AgentDetailPageProps {
   agentId: string;
@@ -116,6 +117,13 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
     'instructions' | 'tools' | 'notifications' | 'knowledge' | 'availability' | 'try'
   >(() => {
     const params = new URLSearchParams(window.location.search);
+    const oauthService = params.get('service')?.trim();
+    if (
+      (params.has('google_oauth') && oauthService === 'google_docs') ||
+      params.get('tab') === 'knowledge'
+    ) {
+      return 'knowledge';
+    }
     if (params.has('google_oauth') || params.get('tab') === 'tools') {
       return 'tools';
     }
@@ -123,11 +131,13 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
       const saved = sessionStorage.getItem(GOOGLE_OAUTH_RETURN_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (
-          parsed?.tab === 'tools' &&
-          Date.now() - Number(parsed?.createdAt || 0) < 15 * 60 * 1000
-        ) {
-          return 'tools';
+        if (Date.now() - Number(parsed?.createdAt || 0) < 15 * 60 * 1000) {
+          if (parsed?.tab === 'knowledge' || parsed?.service === 'google_docs') {
+            return 'knowledge';
+          }
+          if (parsed?.tab === 'tools') {
+            return 'tools';
+          }
         }
       }
     } catch {
@@ -310,15 +320,23 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
   const [sheetToolConfig, setSheetToolConfig] = useState<GoogleSheetToolConfig>(
     agent?.tools?.googleSheet || { enabled: false, columns: [], sheetName: 'Sheet1' }
   );
-  const [googleWorkspaceConfig, setGoogleWorkspaceConfig] = useState<GoogleWorkspaceConfig>(
-    agent?.tools?.googleWorkspace || {
-      gmail: { enabled: false, status: 'disconnected' },
+  const [googleWorkspaceConfig, setGoogleWorkspaceConfig] = useState<GoogleWorkspaceConfig>(() => {
+    const existing = agent?.tools?.googleWorkspace;
+    if (existing) {
+      return {
+        drive: existing.drive,
+        docs: existing.docs,
+        sheets: existing.sheets,
+        calendar: existing.calendar,
+      };
+    }
+    return {
       drive: { enabled: false, status: 'disconnected' },
       docs: { enabled: false, status: 'disconnected' },
       sheets: agent?.tools?.googleSheet || { enabled: false, columns: [], sheetName: 'Sheet1', status: 'disconnected' },
       calendar: { enabled: false, status: 'disconnected' },
-    }
-  );
+    };
+  });
   const [microsoft365Config, setMicrosoft365Config] = useState<Microsoft365Config>(
     agent?.tools?.microsoft365 || {
       outlook: { enabled: false, status: 'disconnected' },
@@ -369,7 +387,27 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
   const [docs, setDocs] = useState<KnowledgeDocument[]>(agent?.knowledgeDocs || []);
   const docsRef = useRef<KnowledgeDocument[]>(agent?.knowledgeDocs || []);
   docsRef.current = docs;
-  const [knowledgeMode, setKnowledgeMode] = useState<'upload' | 'manual'>('upload');
+  const [knowledgeMode, setKnowledgeMode] = useState<'upload' | 'google_docs' | 'manual'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('google_oauth') && params.get('service')?.trim() === 'google_docs') {
+      return 'google_docs';
+    }
+    try {
+      const saved = sessionStorage.getItem(GOOGLE_OAUTH_RETURN_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          Date.now() - Number(parsed?.createdAt || 0) < 15 * 60 * 1000 &&
+          (parsed?.tab === 'knowledge' || parsed?.service === 'google_docs')
+        ) {
+          return 'google_docs';
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return 'upload';
+  });
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [extractedDoc, setExtractedDoc] = useState<ExtractedDocumentResult | null>(null);
   const [isReadingFile, setIsReadingFile] = useState(false);
@@ -2340,12 +2378,12 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                   Business Knowledge Base
                 </h3>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Upload documents from your personal device or type knowledge manually so your agent provides factual, grounded answers.
+                  Upload documents from your personal device, connect Google Docs, or enter knowledge manually so your agent provides factual, grounded answers.
                 </p>
               </div>
 
-              {/* Mode Toggle: Upload from Device vs Manual Input */}
-              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-muted/60 border border-border self-start sm:self-center shrink-0">
+              {/* Mode Toggle: Upload from Device vs Google Docs vs Enter Manually */}
+              <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-muted/60 border border-border self-start sm:self-center shrink-0">
                 <button
                   type="button"
                   onClick={() => setKnowledgeMode('upload')}
@@ -2357,6 +2395,18 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                 >
                   <HardDrive className="size-3.5 text-primary" />
                   <span>Upload from Device</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setKnowledgeMode('google_docs')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    knowledgeMode === 'google_docs'
+                      ? 'bg-card text-foreground shadow-2xs border border-border/80'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <GoogleDocsLogo className="size-3.5" />
+                  <span>Google Docs</span>
                 </button>
                 <button
                   type="button"
@@ -2633,6 +2683,21 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                   </button>
                 </div>
               </div>
+            )}
+
+            {/* MODE 2: Google Docs (Read-Only) */}
+            {knowledgeMode === 'google_docs' && (
+              <GoogleDocsKnowledgeSection
+                value={googleWorkspaceConfig}
+                workspaceId={verifiedWorkspaceId || agent?.workspaceId || null}
+                agentId={!isNewAgent ? agent?.id || null : null}
+                onChange={(updated) => {
+                  setGoogleWorkspaceConfig(updated);
+                  if (updated.sheets) {
+                    setSheetToolConfig(updated.sheets);
+                  }
+                }}
+              />
             )}
 
             {/* Database Insertion Error Banner */}

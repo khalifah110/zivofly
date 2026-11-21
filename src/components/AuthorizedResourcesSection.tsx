@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  Clock,
   ExternalLink,
   File,
   FileArchive,
@@ -63,20 +64,20 @@ const SERVICE_UI_COPY: Record<GoogleResourceServiceKey, ServiceUiCopy> = {
   },
   google_docs: {
     serviceLabel: 'Google Docs',
-    sectionTitle: 'Authorized Google Docs',
-    selectButtonLabel: 'Add Docs',
+    sectionTitle: 'Selected Google Docs',
+    selectButtonLabel: 'Select Google Docs',
     disconnectedPrompt:
-      'Connect your Google Docs account to browse and select native Google Docs documents.',
+      'Connect Google Docs with read-only permissions to browse and select native Google Docs for your Knowledge Base.',
     connectButtonLabel: 'Connect Google Docs',
     reconnectButtonLabel: 'Reconnect Google Docs',
     expiredTitle: 'Google Docs authorization expired',
     errorTitle: 'Google Docs connection needs attention',
     expiredDescription:
       'Reconnect your Google Docs account to browse, verify, or authorize documents.',
-    loadingText: 'Loading authorized Google Docs…',
+    loadingText: 'Loading selected Google Docs…',
     savingText:
       'Verifying selected documents with Google Docs and saving authorization…',
-    scopeReauthTitle: 'Google Docs permissions update required',
+    scopeReauthTitle: 'Google Docs read-only permissions update required',
   },
   google_sheets_service: {
     serviceLabel: 'Google Sheets',
@@ -112,6 +113,7 @@ interface AuthorizedResourcesSectionProps {
   removingResourceId: string | null;
   resourcesError: string | null;
   isBusyConnectingOrDisconnecting?: boolean;
+  pendingSyncBadgeLabel?: string;
   selectedAgentResourceIds?: string[];
   onToggleAgentResource?: (resourceId: string) => void;
   onSelectResources: () => void;
@@ -311,6 +313,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
   removingResourceId,
   resourcesError,
   isBusyConnectingOrDisconnecting = false,
+  pendingSyncBadgeLabel,
   selectedAgentResourceIds,
   onToggleAgentResource,
   onSelectResources,
@@ -580,6 +583,12 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                               <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                                 <CheckCircle2 className="size-2.5" />
                                 <span>Authorized</span>
+                              </span>
+                            )}
+                            {pendingSyncBadgeLabel && (
+                              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                                <Clock className="size-2.5" />
+                                <span>{pendingSyncBadgeLabel}</span>
                               </span>
                             )}
                           </div>

@@ -21,8 +21,6 @@ import {
   updateSupabaseConversationStatus,
   saveSupabaseConversationFeedback,
   getSupabaseConversationFeedback,
-  getStoredActiveWorkspaceId,
-  getUserWorkspaceMemberships,
 } from './supabaseService';
 
 export interface ChannelConnection {
@@ -339,36 +337,8 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       }
 
       const incomingBody = { ...(body || {}) };
-      let isMemberRole = false;
-
-      if (isSupabaseConfigured && userId && !userId.startsWith('user_default')) {
-        try {
-          const memberships = await getUserWorkspaceMemberships(userId);
-          const storedWsId = getStoredActiveWorkspaceId(userId);
-          const activeWs =
-            memberships.find((w) => w.id === storedWsId) || memberships[0] || null;
-          isMemberRole = activeWs?.role === 'member';
-        } catch {
-          // ignore workspace lookup failures
-        }
-      }
-
-      if (isMemberRole) {
-        const hasRestrictedFields =
-          typeof incomingBody.businessName === 'string' ||
-          typeof incomingBody.workspaceId === 'string';
-        if (hasRestrictedFields && typeof incomingBody.name !== 'string') {
-          return jsonResponse(
-            { error: 'Team members cannot update business name or workspace settings.' },
-            403
-          );
-        }
-        delete incomingBody.businessName;
-        delete incomingBody.workspaceId;
-      }
 
       const targetWorkspaceId =
-        !isMemberRole &&
         typeof incomingBody.workspaceId === 'string' &&
         incomingBody.workspaceId.trim()
           ? incomingBody.workspaceId.trim()
@@ -384,7 +354,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
           supabasePatch.name = nextName;
         }
       }
-      if (!isMemberRole && typeof incomingBody.businessName === 'string') {
+      if (typeof incomingBody.businessName === 'string') {
         supabasePatch.businessName = incomingBody.businessName.trim();
       }
       if (typeof incomingBody.avatarUrl === 'string' && incomingBody.avatarUrl.trim()) {

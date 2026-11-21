@@ -477,7 +477,7 @@ export async function verifyGooglePickerAccessToken(params: {
         s === 'https://www.googleapis.com/auth/drive'
     );
     const hasDocumentsScope = scopeList.some(
-      (s) => s === 'https://www.googleapis.com/auth/documents'
+      (s) => s === 'https://www.googleapis.com/auth/documents.readonly'
     );
     const hasSpreadsheetsScope = scopeList.some(
       (s) => s === 'https://www.googleapis.com/auth/spreadsheets'
@@ -489,7 +489,7 @@ export async function verifyGooglePickerAccessToken(params: {
         missingScopes.push('drive.file');
       }
       if (service === 'google_docs' && !hasDocumentsScope) {
-        missingScopes.push('documents');
+        missingScopes.push('documents.readonly');
       }
       if (service === 'google_sheets_service' && !hasSpreadsheetsScope) {
         missingScopes.push('spreadsheets');

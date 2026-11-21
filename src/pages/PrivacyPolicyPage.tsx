@@ -11,8 +11,6 @@ import {
   Mail,
 } from 'lucide-react';
 import {
-  GmailLogo,
-  GoogleDriveLogo,
   GoogleDocsLogo,
   GoogleSheetsLogo,
   GoogleCalendarLogo,
@@ -62,7 +60,7 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
             Overview &amp; Google API Services Limited Use
           </h2>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            Zivofly provides AI-assisted customer conversation automation across messaging and phone channels, along with optional customer-authorized integrations with Google Workspace (Gmail, Google Drive, Google Docs, Google Sheets, and Google Calendar).
+            Zivofly provides AI-assisted customer conversation automation across messaging and phone channels, along with optional customer-authorized integrations with Google Workspace (Google Docs, Google Sheets, and Google Calendar).
           </p>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
             Zivofly&apos;s use and transfer to any other app of information received from Google APIs adheres to the{' '}
@@ -103,7 +101,7 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
           </p>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm text-muted-foreground leading-relaxed">
             <li>Zivofly never asks for, views, or stores your Google account password.</li>
-            <li>Each of the five integrations—Gmail, Google Drive, Google Docs, Google Sheets, and Google Calendar—maintains its own separate connection status, account identity, and authorization record. You may connect only the services you want, including across separate Google accounts.</li>
+            <li>Each Google integration—Google Docs (Knowledge Base), Google Sheets, and Google Calendar—maintains its own separate connection status, account identity, and authorization record. You may connect only the services you want, including across separate Google accounts.</li>
             <li>Zivofly records your Google account identifier/email and connection metadata in your workspace so you can see which Google account is linked to each service.</li>
           </ul>
         </section>
@@ -120,43 +118,15 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
           <div className="grid grid-cols-1 gap-3 pt-1">
             <div className="rounded-xl border border-border bg-muted/25 p-4 flex items-start gap-3">
               <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-card shrink-0">
-                <GmailLogo className="size-5" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-xs sm:text-sm font-semibold text-foreground">
-                  Gmail
-                </h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Used strictly to send automated booking confirmations, create or send customer inquiry replies configured by your workspace, and read inbound customer requests when enabled for your workflows.
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-muted/25 p-4 flex items-start gap-3">
-              <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-card shrink-0">
-                <GoogleDriveLogo className="size-5" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-xs sm:text-sm font-semibold text-foreground">
-                  Google Drive (<span className="font-mono text-[11px]">drive.file</span>)
-                </h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Used exclusively with the official Google Picker so you can browse and explicitly select individual uploaded Drive files (such as PDFs, images, CSVs, Word/Excel documents, and archives) for your workspace. Connecting Google Drive does not grant Zivofly automatic access to unselected files, nor does it authorize native Google Docs or Google Sheets.
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-muted/25 p-4 flex items-start gap-3">
-              <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-card shrink-0">
                 <GoogleDocsLogo className="size-5" />
               </div>
               <div className="space-y-1">
                 <h3 className="text-xs sm:text-sm font-semibold text-foreground">
                   Google Docs (<span className="font-mono text-[11px]">drive.file</span> and{' '}
-                  <span className="font-mono text-[11px]">documents</span>)
+                  <span className="font-mono text-[11px]">documents.readonly</span>)
                 </h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Used to allow you to select specific native Google Docs documents through the Docs Picker and enable authorized workspace AI agents to read standard operating procedures, policy guidelines, or document content you explicitly authorize.
+                  Used within your Knowledge Base with read-only permissions so you can select specific native Google Docs documents through the official Google Picker. Connecting Google Docs does not grant write access or automatic access to unselected files.
                 </p>
               </div>
             </div>
@@ -201,11 +171,11 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
             </h2>
           </div>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            For Google Drive, Google Docs, and Google Sheets, Zivofly enforces explicit customer-controlled resource authorization:
+            For Google Docs and Google Sheets, Zivofly enforces explicit customer-controlled resource authorization:
           </p>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            <li>You select individual files, documents, or spreadsheets using the official Google Picker interface. Only the Google file IDs you choose are submitted to Zivofly&apos;s backend, where file metadata is verified before saving authorization.</li>
-            <li>Google Drive, Google Docs, and Google Sheets maintain separate authorized resource lists tied to each service&apos;s own connection ID. Authorizing a file in one service does not automatically authorize or expose it in another service.</li>
+            <li>You select individual documents or spreadsheets using the official Google Picker interface. Only the Google file IDs you choose are submitted to Zivofly&apos;s backend, where file metadata is verified before saving authorization.</li>
+            <li>Google Docs and Google Sheets maintain separate authorized resource lists tied to each service&apos;s own connection ID. Authorizing a file in one service does not automatically authorize or expose it in another service.</li>
             <li>Within each agent&apos;s configuration, you can also toggle which authorized resources that specific agent is permitted to access.</li>
           </ul>
         </section>
@@ -219,10 +189,10 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
             </h2>
           </div>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            Customer-configured AI agents access authorized Google resources only at runtime to perform tasks configured by the workspace owner—such as answering customer questions using an authorized Google Doc or PDF, looking up or recording rows in an authorized Google Sheet, checking Google Calendar slots, or sending/reading Gmail correspondence.
+            Customer-configured AI agents access authorized Google resources only at runtime to perform tasks configured by the workspace owner—such as answering customer questions using an authorized Google Doc or PDF, looking up or recording rows in an authorized Google Sheet, or checking Google Calendar slots.
           </p>
           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            Zivofly does <strong>not</strong> use Google user data, selected Drive/Docs/Sheets content, Gmail messages, or Calendar events to train generalized or public AI/ML models.
+            Zivofly does <strong>not</strong> use Google user data, selected Drive/Docs/Sheets content, or Calendar events to train generalized or public AI/ML models.
           </p>
         </section>
 
@@ -235,7 +205,7 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
             </h2>
           </div>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            <li>OAuth code exchanges, access tokens, and refresh tokens are processed and stored server-side within Zivofly&apos;s Supabase backend infrastructure, scoped to verified workspace ownership and membership permissions.</li>
+            <li>OAuth code exchanges, access tokens, and refresh tokens are processed and stored server-side within Zivofly&apos;s Supabase backend infrastructure, scoped to verified workspace ownership.</li>
             <li>The Zivofly browser application does not store Google OAuth refresh tokens or long-lived access tokens in browser storage (<span className="font-mono text-[11px]">localStorage</span> or <span className="font-mono text-[11px]">sessionStorage</span>).</li>
             <li>When you open Google Picker, Zivofly&apos;s backend issues a short-lived access token solely in memory for that connection so Google Picker can display your files, and verifies account email and required scopes before opening the modal.</li>
             <li>All network communication between the browser, Zivofly backend services, and Google APIs occurs over HTTPS/TLS. Zivofly does not claim third-party security certifications unless explicitly verified and published.</li>
@@ -286,8 +256,8 @@ export const PrivacyPolicyPage: React.FC<PrivacyPolicyPageProps> = ({
             You remain in full control of your Google permissions and can revoke access at any time:
           </p>
           <ul className="list-disc pl-5 space-y-1.5 text-xs sm:text-sm text-muted-foreground leading-relaxed">
-            <li><strong>Remove Individual Files:</strong> Click <strong>Remove</strong> next to any authorized file in the Google Drive, Google Docs, or Google Sheets card to revoke Zivofly&apos;s authorization for that item in that service. Your original file in Google is never deleted.</li>
-            <li><strong>Disconnect Any Service:</strong> Click <strong>Disconnect</strong> on Gmail, Google Drive, Google Docs, Google Sheets, or Google Calendar to revoke and remove Zivofly&apos;s stored credentials for that service independently without disrupting your other integrations.</li>
+            <li><strong>Remove Individual Files:</strong> Click <strong>Remove</strong> next to any authorized document or spreadsheet in Google Docs (Knowledge Base) or Google Sheets to revoke Zivofly&apos;s authorization for that item in that service. Your original file in Google is never deleted.</li>
+            <li><strong>Disconnect Any Service:</strong> Click <strong>Disconnect</strong> on Google Docs, Google Sheets, or Google Calendar to revoke and remove Zivofly&apos;s stored credentials for that service independently without disrupting your other integrations.</li>
             <li><strong>Revoke Directly via Google:</strong> You can also revoke Zivofly&apos;s access at any time in your Google Account permissions dashboard at{' '}
               <a
                 href="https://myaccount.google.com/permissions"

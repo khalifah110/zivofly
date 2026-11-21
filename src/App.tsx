@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Toaster, toast } from 'sonner';
-import { ShieldAlert, Loader2, Inbox as InboxIcon, LayoutGrid } from 'lucide-react';
+import { AlertTriangle, Loader2, RefreshCw, LogOut, User as UserIcon } from 'lucide-react';
 import { Header } from './components/Header';
 import { LandingPage } from './pages/LandingPage';
 import { AuthPage } from './pages/AuthPage';
@@ -15,24 +15,22 @@ import { ProfilePage } from './pages/ProfilePage';
 import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage';
 import { TermsOfServicePage } from './pages/TermsOfServicePage';
 import { SupportPage } from './pages/SupportPage';
-import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import {
   Agent,
   ChannelConnection,
   Conversation,
   User,
-  WorkspaceMembership,
+  OwnerWorkspace,
 } from './types';
 import { apiFetch } from './lib/api';
 import { supabase } from './lib/supabaseClient';
 import {
   GOOGLE_OAUTH_RETURN_STORAGE_KEY,
   clearActiveWorkspaceCache,
-  getStoredActiveWorkspaceId,
-  getUserWorkspaceMemberships,
+  getOwnerWorkspace,
   processGoogleWorkspaceOAuthCallbackFromUrl,
-  saveJoinedWorkspaceNameHint,
+  saveWorkspaceNameHint,
   setActiveWorkspaceId,
 } from './lib/supabaseService';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -42,23 +40,17 @@ function normalizePathname(rawPath: string): string {
   return base || '/';
 }
 
-function isRestrictedForTeamMember(path: string): boolean {
+function isWorkspaceProtectedRoute(path: string): boolean {
   return (
+    path === '/dashboard' ||
+    path === '/inbox' ||
+    path === '/profile' ||
     path.startsWith('/connect/') ||
     path.startsWith('/channels/') ||
     path === '/agents' ||
     path.startsWith('/agents/') ||
     path === '/billing' ||
     path === '/billing-tokens'
-  );
-}
-
-function isWorkspaceProtectedRoute(path: string): boolean {
-  return (
-    path === '/dashboard' ||
-    path === '/inbox' ||
-    path === '/profile' ||
-    isRestrictedForTeamMember(path)
   );
 }
 
@@ -89,22 +81,13 @@ function AppContent() {
     return normalizePathname(window.location.pathname || '/');
   });
   const [user, setUser] = useState<User | null>(null);
-  const [workspaces, setWorkspaces] = useState<WorkspaceMembership[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceStateId] = useState<string | null>(null);
+  const [activeWorkspace, setActiveWorkspace] = useState<OwnerWorkspace | null>(null);
+  const [workspaceRecoveryError, setWorkspaceRecoveryError] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [connections, setConnections] = useState<ChannelConnection[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const lastWorkspaceIdRef = useRef<string | null>(null);
-
-  const activeWorkspace = React.useMemo(
-    () =>
-      workspaces.find((w) => w.id === activeWorkspaceId) ||
-      workspaces[0] ||
-      null,
-    [workspaces, activeWorkspaceId]
-  );
-  const isTeamMember = activeWorkspace?.role === 'member';
 
   // Sync with browser navigation
   useEffect(() => {
@@ -122,18 +105,19 @@ function AppContent() {
   };
 
   // Initial data loading
-  const loadData = async (overrideWorkspaceId?: string) => {
+  const loadData = async () => {
     setIsLoading(true);
     try {
-      let memberRole = false;
+      let sessionFallbackUser: User | null = null;
+      let resolvedWorkspace: OwnerWorkspace | null = null;
 
       // First verify Supabase session directly
       if (supabase) {
         const { data: sessionData } = await supabase.auth.getSession();
         if (!sessionData?.session?.user) {
           setUser(null);
-          setWorkspaces([]);
-          setActiveWorkspaceStateId(null);
+          setActiveWorkspace(null);
+          setWorkspaceRecoveryError(null);
           setAgents([]);
           setConnections([]);
           setConversations([]);
@@ -146,14 +130,30 @@ function AppContent() {
           return;
         }
 
-        const sessionUserId = sessionData.session.user.id;
-        const memberships = await getUserWorkspaceMemberships(sessionUserId);
-        const preferredId =
-          overrideWorkspaceId || getStoredActiveWorkspaceId(sessionUserId);
-        const resolvedWorkspace =
-          memberships.find((w) => w.id === preferredId) || memberships[0] || null;
+        const authUser = sessionData.session.user;
+        sessionFallbackUser = {
+          id: authUser.id,
+          email: authUser.email || '',
+          name:
+            authUser.user_metadata?.full_name ||
+            authUser.user_metadata?.name ||
+            authUser.email?.split('@')[0] ||
+            'User',
+          businessName: '',
+          avatarUrl:
+            authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture,
+        };
 
-        setWorkspaces(memberships);
+        try {
+          resolvedWorkspace = await getOwnerWorkspace(authUser.id);
+        } catch (wsErr: any) {
+          resolvedWorkspace = null;
+          setWorkspaceRecoveryError(
+            wsErr?.message ||
+              'Unable to load or provision your workspace right now.'
+          );
+        }
+
         if (resolvedWorkspace) {
           if (
             lastWorkspaceIdRef.current &&
@@ -167,62 +167,21 @@ function AppContent() {
           lastWorkspaceIdRef.current = resolvedWorkspace.id;
 
           setActiveWorkspaceId(
-            sessionUserId,
+            authUser.id,
             resolvedWorkspace.id,
             resolvedWorkspace.name
           );
-          setActiveWorkspaceStateId(resolvedWorkspace.id);
-          memberRole = resolvedWorkspace.role === 'member';
+          setActiveWorkspace(resolvedWorkspace);
+          setWorkspaceRecoveryError(null);
         } else {
           lastWorkspaceIdRef.current = null;
-          setActiveWorkspaceStateId(null);
+          setActiveWorkspace(null);
+          clearActiveWorkspaceCache(authUser.id);
+          setWorkspaceRecoveryError((prev) =>
+            prev ||
+            'Your account is signed in, but no owner workspace is currently linked to it. Retry workspace setup or contact support if the issue persists.'
+          );
         }
-      }
-
-      if (memberRole) {
-        localStorage.removeItem('zivofly_agents');
-        setAgents([]);
-
-        const [userRes, connRes, convsRes] = await Promise.all([
-          apiFetch('/api/user/profile'),
-          apiFetch('/api/connections'),
-          apiFetch('/api/conversations'),
-        ]);
-
-        if (userRes.ok) {
-          const ct = userRes.headers.get('content-type');
-          if (ct?.includes('application/json')) {
-            const uData = await userRes.json();
-            if (uData.user) setUser(uData.user);
-            else setUser(null);
-          }
-        }
-
-        if (connRes.ok) {
-          const ct = connRes.headers.get('content-type');
-          if (ct?.includes('application/json')) {
-            const cData = await connRes.json();
-            const list = Array.isArray(cData.data)
-              ? cData.data
-              : Array.isArray(cData.connections)
-              ? cData.connections
-              : [];
-            setConnections(list);
-          }
-        } else {
-          setConnections([]);
-        }
-
-        if (convsRes.ok) {
-          const ct = convsRes.headers.get('content-type');
-          if (ct?.includes('application/json')) {
-            const cvData = await convsRes.json();
-            setConversations(Array.isArray(cvData.conversations) ? cvData.conversations : []);
-          }
-        } else {
-          setConversations([]);
-        }
-        return;
       }
 
       const [userRes, agentsRes, connRes, convsRes] = await Promise.all([
@@ -237,8 +196,12 @@ function AppContent() {
         if (ct?.includes('application/json')) {
           const uData = await userRes.json();
           if (uData.user) setUser(uData.user);
-          else setUser(null);
+          else setUser(sessionFallbackUser);
+        } else if (sessionFallbackUser) {
+          setUser(sessionFallbackUser);
         }
+      } else if (sessionFallbackUser) {
+        setUser(sessionFallbackUser);
       }
 
       if (agentsRes.ok) {
@@ -247,6 +210,8 @@ function AppContent() {
           const aData = await agentsRes.json();
           setAgents(Array.isArray(aData.agents) ? aData.agents : []);
         }
+      } else {
+        setAgents([]);
       }
 
       if (connRes.ok) {
@@ -260,6 +225,8 @@ function AppContent() {
             : [];
           setConnections(list);
         }
+      } else {
+        setConnections([]);
       }
 
       if (convsRes.ok) {
@@ -268,10 +235,13 @@ function AppContent() {
           const cvData = await convsRes.json();
           setConversations(Array.isArray(cvData.conversations) ? cvData.conversations : []);
         }
+      } else {
+        setConversations([]);
       }
     } catch (err) {
       console.error('Failed to load initial data', err);
       setUser(null);
+      setActiveWorkspace(null);
     } finally {
       setIsLoading(false);
     }
@@ -289,8 +259,8 @@ function AppContent() {
           void loadData();
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
-          setWorkspaces([]);
-          setActiveWorkspaceStateId(null);
+          setActiveWorkspace(null);
+          setWorkspaceRecoveryError(null);
           setAgents([]);
           setConnections([]);
           setConversations([]);
@@ -308,12 +278,9 @@ function AppContent() {
     }
   }, []);
 
-  // Wait until workspace membership resolves before rendering restricted routes
-  // (direct access to restricted routes for team members renders an explicit Access Denied view)
-
   // Ensure Google OAuth callback query parameters are handled even if the Edge Function redirects to '/' or '/dashboard'
   useEffect(() => {
-    if (isLoading || isTeamMember) return;
+    if (isLoading) return;
     const search = window.location.search || '';
     if (!search) return;
 
@@ -345,47 +312,6 @@ function AppContent() {
     }
   }, [isLoading, currentPath, user, agents]);
 
-  // Refresh workspace memberships whenever opening Profile so newly joined/owned workspaces appear in Active Workspace
-  useEffect(() => {
-    if (!supabase || isLoading || !user?.id || currentPath !== '/profile') return;
-    let cancelled = false;
-    void getUserWorkspaceMemberships(user.id)
-      .then((memberships) => {
-        if (!cancelled && memberships.length > 0) {
-          setWorkspaces(memberships);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [currentPath, user?.id, isLoading]);
-
-  const handleSwitchWorkspace = async (workspaceId: string) => {
-    if (!workspaceId || workspaceId === activeWorkspace?.id) return;
-    const target = workspaces.find((w) => w.id === workspaceId);
-    if (!target) return;
-
-    if (user?.id) {
-      setActiveWorkspaceId(user.id, target.id, target.name);
-    }
-    setActiveWorkspaceStateId(target.id);
-    localStorage.removeItem('zivofly_agents');
-    localStorage.removeItem('zivofly_connections');
-    localStorage.removeItem('zivofly_conversations');
-    localStorage.removeItem('zivofly_inbox_conv_status_overrides_v1');
-
-    await loadData(target.id);
-
-    if (target.role === 'member' && isRestrictedForTeamMember(currentPath)) {
-      navigate('/inbox');
-    } else if (target.role !== 'member' && currentPath === '/') {
-      navigate('/dashboard');
-    }
-
-    toast.success(`Switched to workspace "${target.name}"`);
-  };
-
   // Handlers for state updates
   const handleSignOut = async () => {
     try {
@@ -398,8 +324,8 @@ function AppContent() {
     lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
-    setWorkspaces([]);
-    setActiveWorkspaceStateId(null);
+    setActiveWorkspace(null);
+    setWorkspaceRecoveryError(null);
     setAgents([]);
     setConnections([]);
     setConversations([]);
@@ -416,8 +342,8 @@ function AppContent() {
     lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
-    setWorkspaces([]);
-    setActiveWorkspaceStateId(null);
+    setActiveWorkspace(null);
+    setWorkspaceRecoveryError(null);
     setAgents([]);
     setConnections([]);
     setConversations([]);
@@ -463,28 +389,6 @@ function AppContent() {
 
   // Route matching
   const renderCurrentView = () => {
-    if (currentPath === '/accept-invite') {
-      return (
-        <AcceptInvitePage
-          user={user}
-          isAuthLoading={isLoading}
-          onNavigate={navigate}
-          onInviteAccepted={async (workspaceId) => {
-            await loadData(workspaceId);
-          }}
-          onSignedOut={() => {
-            clearActiveWorkspaceCache(user?.id);
-            setUser(null);
-            setWorkspaces([]);
-            setActiveWorkspaceStateId(null);
-            setAgents([]);
-            setConnections([]);
-            setConversations([]);
-          }}
-        />
-      );
-    }
-
     if (currentPath === '/reset-password') {
       return (
         <ResetPasswordPage
@@ -492,8 +396,8 @@ function AppContent() {
           onSessionCleared={() => {
             clearActiveWorkspaceCache(user?.id);
             setUser(null);
-            setWorkspaces([]);
-            setActiveWorkspaceStateId(null);
+            setActiveWorkspace(null);
+            setWorkspaceRecoveryError(null);
             setAgents([]);
             setConnections([]);
             setConversations([]);
@@ -541,13 +445,7 @@ function AppContent() {
     }
 
     if (currentPath === '/' && user) {
-      return (
-        <LandingPage
-          onNavigate={navigate}
-          isAuthenticated={true}
-          isTeamMember={isTeamMember}
-        />
-      );
+      return <LandingPage onNavigate={navigate} isAuthenticated={true} />;
     }
 
     if (isLoading && isWorkspaceProtectedRoute(currentPath)) {
@@ -559,39 +457,52 @@ function AppContent() {
       );
     }
 
-    if (user && isTeamMember && isRestrictedForTeamMember(currentPath)) {
+    if (
+      supabase &&
+      user &&
+      !activeWorkspace &&
+      isWorkspaceProtectedRoute(currentPath) &&
+      currentPath !== '/profile'
+    ) {
       return (
         <div className="mx-auto max-w-lg py-12">
           <div className="surface-card p-6 sm:p-8 text-center space-y-5">
             <div className="mx-auto size-12 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-600 dark:text-amber-400">
-              <ShieldAlert className="size-6" />
+              <AlertTriangle className="size-6" />
             </div>
             <div className="space-y-2">
               <h1 className="text-2xl font-medium tracking-tight text-foreground">
-                Access Denied
+                Workspace Recovery Needed
               </h1>
               <p className="text-sm text-muted-foreground leading-relaxed">
-                You are signed in as a <strong className="text-foreground">Team Member</strong> in{' '}
-                <strong className="text-foreground">{activeWorkspace?.name || 'this workspace'}</strong>.
-                Agents, billing, and channel connection controls are only available to workspace owners.
+                {workspaceRecoveryError ||
+                  'Your account is signed in, but we could not locate or provision an owner workspace for your account.'}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => navigate('/inbox')}
+                onClick={() => void loadData()}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:opacity-95 transition-opacity cursor-pointer"
               >
-                <InboxIcon className="size-3.5" />
-                <span>Return to Inbox</span>
+                <RefreshCw className="size-3.5" />
+                <span>Retry Workspace Setup</span>
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/dashboard')}
+                onClick={() => navigate('/profile')}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-accent transition-colors cursor-pointer"
               >
-                <LayoutGrid className="size-3.5" />
-                <span>View Channels</span>
+                <UserIcon className="size-3.5" />
+                <span>Account Profile</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              >
+                <LogOut className="size-3.5" />
+                <span>Sign out</span>
               </button>
             </div>
           </div>
@@ -605,8 +516,6 @@ function AppContent() {
           key={activeWorkspace?.id || 'default'}
           connections={connections}
           onNavigate={navigate}
-          isTeamMember={isTeamMember}
-          workspaceName={activeWorkspace?.name}
         />
       );
     }
@@ -669,7 +578,6 @@ function AppContent() {
           key={activeWorkspace?.id || 'default'}
           conversations={conversations}
           onUpdateConversation={handleUpdateConversation}
-          isTeamMember={isTeamMember}
         />
       );
     }
@@ -685,9 +593,9 @@ function AppContent() {
           user={user}
           agents={agents}
           connections={connections}
-          workspaces={workspaces}
           activeWorkspace={activeWorkspace}
-          onSwitchWorkspace={handleSwitchWorkspace}
+          workspaceRecoveryError={workspaceRecoveryError}
+          onRetryWorkspace={() => void loadData()}
           onUserUpdated={(updated) => {
             setUser(updated);
             const updatedBiz =
@@ -695,27 +603,26 @@ function AppContent() {
                 ? updated.businessName.trim()
                 : '';
             if (
+              activeWorkspace &&
               updatedBiz &&
               updatedBiz !== 'My Business' &&
               updatedBiz !== 'My Workspace'
             ) {
-              setWorkspaces((prev) =>
-                prev.map((ws) => {
-                  if (ws.role === 'owner') {
-                    saveJoinedWorkspaceNameHint(ws.id, updatedBiz);
-                    if (activeWorkspace?.id === ws.id && updated?.id) {
-                      setActiveWorkspaceId(updated.id, ws.id, updatedBiz);
-                    }
-                    return { ...ws, name: updatedBiz };
-                  }
-                  return ws;
-                })
+              saveWorkspaceNameHint(activeWorkspace.id, updatedBiz);
+              if (updated?.id) {
+                setActiveWorkspaceId(updated.id, activeWorkspace.id, updatedBiz);
+              }
+              setActiveWorkspace((prev) =>
+                prev ? { ...prev, name: updatedBiz } : prev
               );
             }
             if (supabase && updated?.id) {
-              void getUserWorkspaceMemberships(updated.id)
-                .then((memberships) => {
-                  if (memberships.length > 0) setWorkspaces(memberships);
+              void getOwnerWorkspace(updated.id)
+                .then((ws) => {
+                  if (ws) {
+                    setActiveWorkspace(ws);
+                    setWorkspaceRecoveryError(null);
+                  }
                 })
                 .catch(() => {});
             }
@@ -727,33 +634,70 @@ function AppContent() {
       );
     }
 
-    // Default fallback to inbox (for team members) or dashboard (for owners) if signed in, else landing
-    return user ? (
-      isTeamMember ? (
-        <InboxPage
-          key={activeWorkspace?.id || 'default'}
-          conversations={conversations}
-          onUpdateConversation={handleUpdateConversation}
-          isTeamMember
-        />
-      ) : (
+    // Default fallback to dashboard if signed in (or recovery view if no workspace), else landing
+    if (user) {
+      if (supabase && !activeWorkspace) {
+        return (
+          <div className="mx-auto max-w-lg py-12">
+            <div className="surface-card p-6 sm:p-8 text-center space-y-5">
+              <div className="mx-auto size-12 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="size-6" />
+              </div>
+              <div className="space-y-2">
+                <h1 className="text-2xl font-medium tracking-tight text-foreground">
+                  Workspace Recovery Needed
+                </h1>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {workspaceRecoveryError ||
+                    'Your account is signed in, but we could not locate or provision an owner workspace for your account.'}
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => void loadData()}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:opacity-95 transition-opacity cursor-pointer"
+                >
+                  <RefreshCw className="size-3.5" />
+                  <span>Retry Workspace Setup</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/profile')}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <UserIcon className="size-3.5" />
+                  <span>Account Profile</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSignOut()}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <LogOut className="size-3.5" />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
         <DashboardPage
           key={activeWorkspace?.id || 'default'}
           connections={connections}
           onNavigate={navigate}
-          isTeamMember={false}
-          workspaceName={activeWorkspace?.name}
         />
-      )
-    ) : (
-      <LandingPage onNavigate={navigate} isAuthenticated={false} />
-    );
+      );
+    }
+
+    return <LandingPage onNavigate={navigate} isAuthenticated={false} />;
   };
 
   const isFullBleedPublicPage =
     currentPath === '/' ||
     currentPath === '/auth' ||
-    currentPath === '/accept-invite' ||
     currentPath === '/reset-password' ||
     currentPath === '/privacy' ||
     currentPath === '/privacy-policy' ||
@@ -772,9 +716,6 @@ function AppContent() {
         currentPath={currentPath}
         onNavigate={navigate}
         onSignOut={handleSignOut}
-        workspaces={workspaces}
-        activeWorkspace={activeWorkspace}
-        onSwitchWorkspace={handleSwitchWorkspace}
       />
 
       {/* Main View Container */}

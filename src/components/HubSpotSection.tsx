@@ -39,23 +39,6 @@ export const HubSpotSection: React.FC<HubSpotSectionProps> = ({
   const accountEmail = config.accountEmail || config.contacts?.accountEmail || 'business@hubspot.com';
   const portalId = config.portalId || '48291034';
 
-  const handleConnect = () => {
-    const updated: HubSpotConfig = {
-      enabled: true,
-      status: 'connected',
-      accountEmail,
-      portalId,
-      connectedAt: new Date().toISOString(),
-      lastSyncedAt: new Date().toISOString(),
-      contacts: { enabled: true, status: 'connected', accountEmail },
-      deals: { enabled: true, status: 'connected', accountEmail },
-      serviceHub: { enabled: true, status: 'connected', accountEmail },
-      marketingForms: { enabled: true, status: 'connected', accountEmail },
-    };
-    onChange?.(updated);
-    toast.info('HubSpot OAuth connect will be added soon.');
-  };
-
   const handleDisconnect = () => {
     const updated: HubSpotConfig = {
       enabled: false,
@@ -119,11 +102,12 @@ export const HubSpotSection: React.FC<HubSpotSectionProps> = ({
           ) : (
             <button
               type="button"
-              onClick={handleConnect}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 transition-colors shadow-xs cursor-pointer"
+              disabled
+              aria-disabled="true"
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground cursor-not-allowed opacity-80"
             >
-              <HubSpotLogo className="size-3.5" />
-              <span>Connect to HubSpot</span>
+              <HubSpotLogo className="size-3.5 opacity-75" />
+              <span>Coming Soon</span>
             </button>
           )}
         </div>

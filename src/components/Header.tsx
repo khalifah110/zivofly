@@ -10,9 +10,8 @@ import {
   Menu,
   X,
   User as UserIcon,
-  Building2,
 } from 'lucide-react';
-import { User, WorkspaceMembership } from '../types';
+import { User } from '../types';
 import { useTheme } from '../context/ThemeContext';
 
 interface HeaderProps {
@@ -20,9 +19,6 @@ interface HeaderProps {
   currentPath: string;
   onNavigate: (path: string) => void;
   onSignOut: () => void;
-  workspaces?: WorkspaceMembership[];
-  activeWorkspace?: WorkspaceMembership | null;
-  onSwitchWorkspace?: (workspaceId: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -30,20 +26,14 @@ export const Header: React.FC<HeaderProps> = ({
   currentPath,
   onNavigate,
   onSignOut,
-  workspaces = [],
-  activeWorkspace = null,
-  onSwitchWorkspace,
 }) => {
   const isAuthPage =
     currentPath === '/auth' ||
-    currentPath === '/accept-invite' ||
     currentPath === '/reset-password';
   const { isDark, toggleTheme } = useTheme();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   if (isAuthPage) return null;
-
-  const isTeamMember = activeWorkspace?.role === 'member';
 
   const handleMobileNavClick = (path: string) => {
     setIsMobileMenuOpen(false);
@@ -55,7 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-6 sm:gap-8">
           <button
-            onClick={() => onNavigate(user ? (isTeamMember ? '/inbox' : '/dashboard') : '/')}
+            onClick={() => onNavigate(user ? '/dashboard' : '/')}
             className="flex items-center gap-2 text-left focus:outline-none cursor-pointer"
           >
             <span className="font-display text-2xl font-normal tracking-tight text-foreground">
@@ -80,20 +70,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>Channels</span>
               </button>
 
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => onNavigate('/agents')}
-                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
-                    currentPath.startsWith('/agents')
-                      ? 'bg-accent text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <Bot className="size-4" />
-                  <span>Agents</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => onNavigate('/agents')}
+                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath.startsWith('/agents')
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Bot className="size-4" />
+                <span>Agents</span>
+              </button>
 
               <button
                 type="button"
@@ -108,20 +96,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>Inbox</span>
               </button>
 
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => onNavigate('/billing')}
-                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
-                    currentPath === '/billing' || currentPath === '/billing-tokens'
-                      ? 'bg-accent text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <Coins className="size-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Billing</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => onNavigate('/billing')}
+                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                  currentPath === '/billing' || currentPath === '/billing-tokens'
+                    ? 'bg-accent text-foreground font-medium'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Coins className="size-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Billing</span>
+              </button>
 
               <button
                 type="button"
@@ -207,34 +193,8 @@ export const Header: React.FC<HeaderProps> = ({
 
           {user ? (
             <>
-              {/* Desktop Workspace Selector, User Profile & Sign Out */}
+              {/* Desktop User Profile & Sign Out */}
               <div className="hidden sm:flex items-center gap-2">
-                {isTeamMember && workspaces.length > 0 && onSwitchWorkspace && (
-                  <div className="relative flex items-center">
-                    <Building2 className="size-3.5 text-muted-foreground absolute left-2.5 pointer-events-none" />
-                    <select
-                      id="header-workspace-selector"
-                      aria-label="Workspace selector"
-                      value={activeWorkspace?.id || workspaces[0]?.id || ''}
-                      onChange={(e) => onSwitchWorkspace(e.target.value)}
-                      className="h-8 max-w-[175px] rounded-xl border border-border bg-card pl-7 pr-2.5 text-xs font-medium text-foreground hover:bg-accent focus:outline-hidden focus:ring-2 focus:ring-primary/40 transition-colors shadow-2xs cursor-pointer truncate"
-                    >
-                      {workspaces.map((ws) => {
-                        const roleLabel =
-                          ws.role === 'owner'
-                            ? 'Owner'
-                            : ws.role === 'admin'
-                            ? 'Admin'
-                            : 'Member';
-                        return (
-                          <option key={ws.id} value={ws.id}>
-                            {ws.name} ({roleLabel})
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                )}
 
                 <button
                   type="button"
@@ -318,44 +278,6 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="sm:hidden border-t border-border bg-background/98 backdrop-blur-xl px-4 py-3 space-y-1 shadow-lg animate-in slide-in-from-top-2 duration-150">
           {user ? (
             <>
-              {isTeamMember && workspaces.length > 0 && onSwitchWorkspace && (
-                <div className="px-2 pb-2 mb-1 border-b border-border/60">
-                  <label
-                    htmlFor="mobile-workspace-selector"
-                    className="block text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-1.5"
-                  >
-                    Workspace
-                  </label>
-                  <div className="relative flex items-center">
-                    <Building2 className="size-3.5 text-muted-foreground absolute left-3 pointer-events-none" />
-                    <select
-                      id="mobile-workspace-selector"
-                      aria-label="Workspace selector"
-                      value={activeWorkspace?.id || workspaces[0]?.id || ''}
-                      onChange={(e) => {
-                        onSwitchWorkspace(e.target.value);
-                        setIsMobileMenuOpen(false);
-                      }}
-                      className="w-full h-9 rounded-xl border border-border bg-card pl-8 pr-3 text-xs font-medium text-foreground focus:outline-hidden focus:ring-2 focus:ring-primary/40"
-                    >
-                      {workspaces.map((ws) => {
-                        const roleLabel =
-                          ws.role === 'owner'
-                            ? 'Owner'
-                            : ws.role === 'admin'
-                            ? 'Admin'
-                            : 'Member';
-                        return (
-                          <option key={ws.id} value={ws.id}>
-                            {ws.name} ({roleLabel})
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                </div>
-              )}
-
               <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1">
                 Navigation
               </div>
@@ -375,20 +297,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>Channels</span>
               </button>
 
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => handleMobileNavClick('/agents')}
-                  className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-                    currentPath.startsWith('/agents')
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                      : 'text-foreground hover:bg-accent'
-                  }`}
-                >
-                  <Bot className="size-4.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Agents</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/agents')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath.startsWith('/agents')
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <Bot className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Agents</span>
+              </button>
 
               <button
                 type="button"
@@ -403,20 +323,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>Inbox</span>
               </button>
 
-              {!isTeamMember && (
-                <button
-                  type="button"
-                  onClick={() => handleMobileNavClick('/billing')}
-                  className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-                    currentPath === '/billing' || currentPath === '/billing-tokens'
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-foreground hover:bg-accent'
-                  }`}
-                >
-                  <Coins className="size-4.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Billing &amp; Tokens</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => handleMobileNavClick('/billing')}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  currentPath === '/billing' || currentPath === '/billing-tokens'
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold'
+                    : 'text-foreground hover:bg-accent'
+                }`}
+              >
+                <Coins className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Billing &amp; Tokens</span>
+              </button>
 
               <button
                 type="button"
