@@ -455,46 +455,41 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         /* Connected State: Connection summary + Google Picker & Selected Docs management */
         <div className="rounded-2xl border border-border bg-muted/20 p-4 sm:p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
+            <div className="flex items-center gap-3">
               <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-white dark:bg-muted p-2 shrink-0 shadow-2xs">
                 <GoogleDocsLogo className="size-5" />
               </div>
 
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-bold text-foreground">
-                    Google Docs
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-foreground">
+                  Google Docs
+                </span>
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <CheckCircle2 className="size-2.5" />
+                  <span>Read-only connected</span>
+                </span>
+                {docsResources.needsScopeReauth && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    Reauthorization required
                   </span>
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    <CheckCircle2 className="size-2.5" />
-                    <span>Read-only connected</span>
+                )}
+                {!docsResources.needsScopeReauth && docsResources.activeCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                    <Clock className="size-2.5" />
+                    <span>
+                      {docsResources.activeCount}{' '}
+                      {docsResources.activeCount === 1 ? 'Doc' : 'Docs'} selected · Indexing pending
+                    </span>
                   </span>
-                  {docsResources.needsScopeReauth && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                      Reauthorization required
-                    </span>
-                  )}
-                  {!docsResources.needsScopeReauth && docsResources.activeCount > 0 && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
-                      <Clock className="size-2.5" />
-                      <span>
-                        {docsResources.activeCount}{' '}
-                        {docsResources.activeCount === 1 ? 'Doc' : 'Docs'} selected · Indexing pending
-                      </span>
-                    </span>
-                  )}
-                  {accountEmail && (
-                    <span
-                      title={`Connected Google account for Google Docs: ${accountEmail}`}
-                      className="inline-flex items-center rounded-full bg-background px-2 py-0.5 text-[10px] font-medium text-foreground/85 border border-border max-w-[220px] truncate"
-                    >
-                      {accountEmail}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Select native Google Docs via Google Picker using read-only permissions (<span className="font-mono">drive.file</span> + <span className="font-mono">documents.readonly</span>).
-                </p>
+                )}
+                {accountEmail && (
+                  <span
+                    title={`Connected Google account for Google Docs: ${accountEmail}`}
+                    className="inline-flex items-center rounded-full bg-background px-2 py-0.5 text-[10px] font-medium text-foreground/85 border border-border max-w-[220px] truncate"
+                  >
+                    {accountEmail}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -551,19 +546,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
           />
         </div>
       )}
-
-      {/* Honest Backend Ingestion & Sync Limitation Notice */}
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 flex items-start gap-2.5">
-        <Clock className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-amber-800 dark:text-amber-200">
-            Knowledge Base indexing &amp; sync pending backend support
-          </p>
-          <p className="text-[11px] text-amber-800/90 dark:text-amber-200/90 leading-relaxed">
-            You can connect Google Docs and save your document selections via Google Picker, and existing selections are preserved. However, server-side Google Docs text extraction, Knowledge Base indexing, and automatic change synchronization are not yet deployed in Supabase—selected Google Docs are currently <strong>pending indexing</strong> and are not yet searchable by your agent. To ground your agent immediately, switch to <strong>Upload from Device</strong> or <strong>Enter Manually</strong>.
-          </p>
-        </div>
-      </div>
 
       <RemoveGoogleResourceModal
         resource={resourceToRemove}
