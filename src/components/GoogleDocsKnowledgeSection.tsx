@@ -418,12 +418,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
               <span className="px-2 py-0.5 rounded-md bg-muted font-medium border border-border">
                 Google Docs
               </span>
-              <span className="px-2 py-0.5 rounded-md bg-muted font-medium border border-border font-mono text-[10px]">
-                drive.file
-              </span>
-              <span className="px-2 py-0.5 rounded-md bg-muted font-medium border border-border font-mono text-[10px]">
-                documents.readonly
-              </span>
             </div>
 
             <button
@@ -624,10 +618,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
                 </span>{' '}
                 will no longer be connected to Zivofly in this workspace, and its stored access credentials will be removed.
               </p>
-
-              <div className="rounded-xl border border-border bg-muted/40 p-3 text-[11px] text-muted-foreground leading-relaxed">
-                Other connected Google Workspace integrations (such as Google Sheets and Google Calendar) will remain active and unaffected. You can reconnect Google Docs at any time.
-              </div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-border">
