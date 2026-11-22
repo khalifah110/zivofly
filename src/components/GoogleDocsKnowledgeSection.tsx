@@ -705,12 +705,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         // Strict rule: ONLY display success when success === true AND document.status === 'ready'
         if (outcome.success && outcome.isReady && outcome.status === 'ready') {
           setReconnectRequiredBanner(null);
-          const count = persistedDoc?.chunkCount ?? outcome.chunksCreated ?? 0;
-          toast.success(
-            `Synced "${resource.name}" (${count} ${
-              count === 1 ? 'chunk' : 'chunks'
-            }, Ready).`
-          );
+          toast.success(`"${resource.name}" connected.`);
         } else if (classifiedError) {
           const stageSuffix = classifiedError.stage
             ? ` [stage: ${classifiedError.stage}]`
@@ -835,13 +830,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       const isFailed = effectiveStatus === 'failed' && !isSyncingThis;
       const isProcessing = isSyncingThis || effectiveStatus === 'processing';
 
-      const effectiveChunkCount =
-        typeof dbDoc?.chunkCount === 'number'
-          ? dbDoc.chunkCount
-          : typeof runtime?.chunkCount === 'number'
-          ? runtime.chunkCount
-          : null;
-
       const effectiveSourceModified =
         dbDoc?.sourceModifiedTime || runtime?.sourceModifiedTime || null;
       const formattedSourceModified = formatDateTimeLabel(
@@ -867,7 +855,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       const statusLabel = isProcessing
         ? 'Processing'
         : isReady
-        ? 'Ready'
+        ? 'Connected'
         : isFailed
         ? 'Failed'
         : 'Queued';
@@ -891,14 +879,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
                   )}
                   <span>{statusLabel}</span>
                 </span>
-
-                {effectiveChunkCount !== null &&
-                  (isReady || effectiveChunkCount > 0) && (
-                    <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
-                      {effectiveChunkCount}{' '}
-                      {effectiveChunkCount === 1 ? 'chunk' : 'chunks'}
-                    </span>
-                  )}
 
                 {formattedSourceModified && (
                   <span className="text-[10px] text-muted-foreground">
@@ -1063,19 +1043,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     sessionPickedResourceIds,
   ]);
 
-  const readyDocsCount = useMemo(() => {
-    const readyResourceIds = new Set<string>();
-    for (const res of visibleAgentResources) {
-      const hasReady = agentGoogleDocs.some(
-        (doc) => doc.status === 'ready' && matchesGoogleResource(doc, res)
-      );
-      if (hasReady) {
-        readyResourceIds.add(res.id);
-      }
-    }
-    return readyResourceIds.size;
-  }, [visibleAgentResources, agentGoogleDocs]);
-
   const isBusy = isConnecting || isDisconnecting;
 
   return (
@@ -1236,7 +1203,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
                     <span>
                       {visibleAgentResources.length}{' '}
                       {visibleAgentResources.length === 1 ? 'Doc' : 'Docs'} selected
-                      {readyDocsCount > 0 ? ` · ${readyDocsCount} Ready` : ''}
                     </span>
                   </span>
                 )}
