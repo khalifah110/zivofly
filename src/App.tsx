@@ -88,6 +88,8 @@ function AppContent() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const lastWorkspaceIdRef = useRef<string | null>(null);
+  const loadedUserIdRef = useRef<string | null>(null);
+  const isLoadingDataRef = useRef<boolean>(false);
 
   // Sync with browser navigation
   useEffect(() => {
@@ -105,8 +107,12 @@ function AppContent() {
   };
 
   // Initial data loading
-  const loadData = async () => {
-    setIsLoading(true);
+  const loadData = async (options?: { showLoading?: boolean }) => {
+    const shouldShowLoading = options?.showLoading ?? true;
+    if (shouldShowLoading) {
+      setIsLoading(true);
+    }
+    isLoadingDataRef.current = true;
     try {
       let sessionFallbackUser: User | null = null;
       let resolvedWorkspace: OwnerWorkspace | null = null;
@@ -115,6 +121,7 @@ function AppContent() {
       if (supabase) {
         const { data: sessionData } = await supabase.auth.getSession();
         if (!sessionData?.session?.user) {
+          loadedUserIdRef.current = null;
           setUser(null);
           setActiveWorkspace(null);
           setWorkspaceRecoveryError(null);
@@ -131,6 +138,7 @@ function AppContent() {
         }
 
         const authUser = sessionData.session.user;
+        loadedUserIdRef.current = authUser.id;
         sessionFallbackUser = {
           id: authUser.id,
           email: authUser.email || '',
@@ -240,24 +248,22 @@ function AppContent() {
       }
     } catch (err) {
       console.error('Failed to load initial data', err);
+      loadedUserIdRef.current = null;
       setUser(null);
       setActiveWorkspace(null);
     } finally {
+      isLoadingDataRef.current = false;
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadData();
+    void loadData({ showLoading: true });
 
     if (supabase) {
-      const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (session?.user) {
-          localStorage.removeItem('zivofly_agents');
-          localStorage.removeItem('zivofly_connections');
-          localStorage.removeItem('zivofly_conversations');
-          void loadData();
-        } else if (event === 'SIGNED_OUT') {
+      const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_OUT') {
+          loadedUserIdRef.current = null;
           setUser(null);
           setActiveWorkspace(null);
           setWorkspaceRecoveryError(null);
@@ -269,6 +275,41 @@ function AppContent() {
           localStorage.removeItem('zivofly_agents');
           localStorage.removeItem('zivofly_connections');
           localStorage.removeItem('zivofly_conversations');
+          setIsLoading(false);
+          return;
+        }
+
+        // Ignore initial hydration (already handled on mount) and silent token/profile refreshes
+        // so returning to the browser tab never triggers a loading screen or resets active pages.
+        if (
+          event === 'INITIAL_SESSION' ||
+          event === 'TOKEN_REFRESHED' ||
+          event === 'USER_UPDATED' ||
+          event === 'PASSWORD_RECOVERY'
+        ) {
+          if (session?.user?.id) {
+            loadedUserIdRef.current = session.user.id;
+          }
+          return;
+        }
+
+        if (event === 'SIGNED_IN' && session?.user) {
+          // Supabase JS v2 re-emits SIGNED_IN when a browser tab regains focus/visibility.
+          // If this exact user is already loaded (or initial load is already in progress),
+          // skip reloading so active tabs and unsaved form work are preserved.
+          if (
+            loadedUserIdRef.current === session.user.id ||
+            isLoadingDataRef.current
+          ) {
+            loadedUserIdRef.current = session.user.id;
+            return;
+          }
+
+          loadedUserIdRef.current = session.user.id;
+          localStorage.removeItem('zivofly_agents');
+          localStorage.removeItem('zivofly_connections');
+          localStorage.removeItem('zivofly_conversations');
+          void loadData({ showLoading: true });
         }
       });
 
@@ -321,6 +362,7 @@ function AppContent() {
     }
     localStorage.removeItem('zivofly_token');
     localStorage.removeItem('zivofly_supabase_auth_token');
+    loadedUserIdRef.current = null;
     lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
@@ -339,6 +381,7 @@ function AppContent() {
     localStorage.removeItem('zivofly_agents');
     localStorage.removeItem('zivofly_connections');
     localStorage.removeItem('zivofly_conversations');
+    loadedUserIdRef.current = null;
     lastWorkspaceIdRef.current = null;
     clearActiveWorkspaceCache(user?.id);
     setUser(null);
@@ -394,6 +437,7 @@ function AppContent() {
         <ResetPasswordPage
           onNavigate={navigate}
           onSessionCleared={() => {
+            loadedUserIdRef.current = null;
             clearActiveWorkspaceCache(user?.id);
             setUser(null);
             setActiveWorkspace(null);
@@ -411,7 +455,12 @@ function AppContent() {
         <AuthPage
           onSignInSuccess={(u) => {
             setUser(u);
-            void loadData();
+            if (!isLoadingDataRef.current || loadedUserIdRef.current !== u?.id) {
+              if (u?.id) {
+                loadedUserIdRef.current = u.id;
+              }
+              void loadData({ showLoading: true });
+            }
           }}
           onNavigate={navigate}
         />
