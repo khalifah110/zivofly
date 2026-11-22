@@ -4,6 +4,8 @@ import {
   ChannelConnection,
   Conversation,
   KnowledgeDocument,
+  KnowledgeDocumentStatus,
+  GoogleDocSyncOutcome,
   User,
   ChatMessage,
   GoogleWorkspaceAppConfig,
@@ -432,13 +434,33 @@ export function mapSupabaseKnowledgeDocToFrontend(d: any): KnowledgeDocument {
       : 'text';
 
   const rawChunkCount = typeof d.chunk_count === 'number' ? d.chunk_count : 0;
-  // A document must only be shown as 'ready' when its chunks and embeddings have been saved (chunk_count > 0)
+  // For google_doc, preserve the exact backend status returned by Supabase/sync_google_doc.
+  // For other document types, preserve existing ready/queued guard when chunk_count === 0.
   const effectiveStatus: KnowledgeDocument['status'] =
-    d.status === 'ready' && rawChunkCount > 0
+    sourceType === 'google_doc'
+      ? (d.status as KnowledgeDocument['status']) || 'queued'
+      : d.status === 'ready' && rawChunkCount > 0
       ? 'ready'
       : d.status === 'ready' && rawChunkCount === 0
       ? 'queued'
       : d.status || 'queued';
+
+  const metadata =
+    d.metadata && typeof d.metadata === 'object' ? d.metadata : null;
+  const sourceModifiedTime =
+    typeof metadata?.source_modified_time === 'string' &&
+    metadata.source_modified_time.trim()
+      ? metadata.source_modified_time.trim()
+      : typeof metadata?.sourceModifiedTime === 'string' &&
+        metadata.sourceModifiedTime.trim()
+      ? metadata.sourceModifiedTime.trim()
+      : typeof metadata?.modified_time === 'string' &&
+        metadata.modified_time.trim()
+      ? metadata.modified_time.trim()
+      : typeof metadata?.modifiedTime === 'string' &&
+        metadata.modifiedTime.trim()
+      ? metadata.modifiedTime.trim()
+      : null;
 
   return {
     id: d.id,
@@ -456,6 +478,9 @@ export function mapSupabaseKnowledgeDocToFrontend(d: any): KnowledgeDocument {
     createdAt: d.created_at || new Date().toISOString(),
     updatedAt: d.updated_at || d.created_at || new Date().toISOString(),
     fileSize: formattedSize,
+    sourceUrl: typeof d.source_url === 'string' ? d.source_url : null,
+    sourceModifiedTime,
+    metadata,
   };
 }
 
@@ -5259,6 +5284,7 @@ export async function saveGoogleSelectedResources(params: {
   savedCount: number;
   rejectedCount: number;
   rejectedReasons: string[];
+  savedResources: GoogleAuthorizedResource[];
   message: string;
 }> {
   const service: GoogleResourceServiceKey = params.service || 'google_drive';
@@ -5384,6 +5410,17 @@ export async function saveGoogleSelectedResources(params: {
       );
     }
 
+    const savedResources: GoogleAuthorizedResource[] = Array.isArray(data.resources)
+      ? data.resources
+          .map((item: any) =>
+            mapAuthorizedResourceRow(item, workspaceId, connectionId, service)
+          )
+          .filter(
+            (item: GoogleAuthorizedResource | null): item is GoogleAuthorizedResource =>
+              Boolean(item)
+          )
+      : [];
+
     return {
       workspaceId,
       connectionId,
@@ -5391,6 +5428,7 @@ export async function saveGoogleSelectedResources(params: {
       savedCount,
       rejectedCount,
       rejectedReasons,
+      savedResources,
       message:
         typeof data.message === 'string' && data.message.trim()
           ? data.message.trim()
@@ -5401,6 +5439,306 @@ export async function saveGoogleSelectedResources(params: {
   } finally {
     inFlightResourceSaveKeys.delete(saveLockKey);
   }
+}
+
+const VALID_KNOWLEDGE_DOC_STATUSES: ReadonlySet<KnowledgeDocumentStatus> = new Set([
+  'queued',
+  'processing',
+  'ready',
+  'failed',
+  'deleted',
+]);
+
+function normalizeKnowledgeDocStatus(raw: unknown): KnowledgeDocumentStatus | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase() as KnowledgeDocumentStatus;
+  return VALID_KNOWLEDGE_DOC_STATUSES.has(normalized) ? normalized : null;
+}
+
+/**
+ * Fetches persisted Google Doc knowledge_documents records for the active workspace
+ * so Knowledge Base sync statuses, chunk counts, and source modification times stay
+ * synchronized with Supabase across page reloads.
+ */
+export async function getWorkspaceGoogleDocKnowledgeRecords(
+  workspaceId: string
+): Promise<KnowledgeDocument[]> {
+  if (!supabase || !isValidUuid(workspaceId)) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('knowledge_documents')
+    .select('*')
+    .eq('workspace_id', workspaceId)
+    .eq('source_type', 'google_doc')
+    .neq('status', 'deleted')
+    .order('updated_at', { ascending: false });
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data.map((row) => mapSupabaseKnowledgeDocToFrontend(row));
+}
+
+/**
+ * Invokes the deployed `google_workspace` Edge Function with `action: "sync_google_doc"`
+ * to download the selected native Google Doc server-side, extract text, upsert its
+ * `knowledge_documents` record for the chosen agent, and run `zivofy_ai` `process_document`.
+ *
+ * Strictly requires `success === true` AND `document.status === 'ready'` to report `isReady: true`.
+ * Preserves backend error details (`error`, `stage`, `document_id`, `status`, `reconnect_required`).
+ */
+export async function syncGoogleDocToKnowledgeBase(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  resourceId: string;
+  agentId: string;
+}): Promise<GoogleDocSyncOutcome> {
+  const normalizedConnectionId =
+    typeof params.connectionId === 'string' ? params.connectionId.trim() : '';
+  const normalizedResourceId =
+    typeof params.resourceId === 'string' ? params.resourceId.trim() : '';
+  const normalizedAgentId =
+    typeof params.agentId === 'string' ? params.agentId.trim() : '';
+
+  const baseFailure = (
+    errorMessage: string,
+    overrides?: Partial<GoogleDocSyncOutcome>
+  ): GoogleDocSyncOutcome => ({
+    success: false,
+    isReady: false,
+    action: 'sync_google_doc',
+    workspaceId: overrides?.workspaceId || params.workspaceId || '',
+    connectionId: normalizedConnectionId,
+    resourceId: normalizedResourceId,
+    agentId: normalizedAgentId,
+    document: overrides?.document ?? null,
+    documentId: overrides?.documentId ?? overrides?.document?.id ?? null,
+    status: overrides?.status ?? overrides?.document?.status ?? null,
+    sourceModifiedTime: overrides?.sourceModifiedTime ?? null,
+    chunksCreated: overrides?.chunksCreated ?? null,
+    error: errorMessage,
+    stage: overrides?.stage ?? null,
+    reconnectRequired: Boolean(
+      overrides?.reconnectRequired || isGoogleScopeReauthError(errorMessage)
+    ),
+  });
+
+  if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return baseFailure(
+      'Supabase client is not configured (missing project URL or anon key).'
+    );
+  }
+
+  if (!isValidUuid(normalizedConnectionId)) {
+    return baseFailure(
+      'Missing or invalid Google Docs connection ID. Please reconnect Google Docs first.'
+    );
+  }
+
+  if (!isValidUuid(normalizedResourceId)) {
+    return baseFailure(
+      'Missing or invalid selected Google Doc resource ID.'
+    );
+  }
+
+  if (!isValidUuid(normalizedAgentId)) {
+    return baseFailure(
+      'Please choose a saved target agent before syncing this Google Doc.'
+    );
+  }
+
+  let resolvedWorkspaceId = '';
+  let accessToken = '';
+  try {
+    const resolved = await resolveActiveGoogleWorkspaceId({
+      workspaceId: params.workspaceId,
+      agentId: normalizedAgentId,
+    });
+    resolvedWorkspaceId = resolved.workspaceId;
+    accessToken = resolved.accessToken;
+  } catch (authErr: any) {
+    return baseFailure(
+      authErr?.message ||
+        'Your Supabase session could not be verified. Please sign in again and retry.'
+    );
+  }
+
+  if (!isValidUuid(resolvedWorkspaceId)) {
+    return baseFailure('Could not resolve a valid active workspace ID.');
+  }
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'google_workspace',
+    {
+      headers: accessToken
+        ? { Authorization: `Bearer ${accessToken}` }
+        : undefined,
+      body: {
+        action: 'sync_google_doc',
+        workspace_id: resolvedWorkspaceId,
+        connection_id: normalizedConnectionId,
+        resource_id: normalizedResourceId,
+        agent_id: normalizedAgentId,
+      },
+    }
+  );
+
+  // Extract structured JSON payload even when the Edge Function returns a non-2xx HTTP status
+  let payload: any = data && typeof data === 'object' ? data : null;
+  if (!payload && response) {
+    try {
+      payload = await response.clone().json();
+    } catch {
+      payload = null;
+    }
+  }
+  if (!payload && error && typeof (error as any)?.context?.json === 'function') {
+    try {
+      payload = await (error as any).context.json();
+    } catch {
+      payload = null;
+    }
+  }
+
+  const rawDoc =
+    payload?.document && typeof payload.document === 'object'
+      ? payload.document
+      : null;
+
+  const sourceModifiedTime =
+    typeof payload?.source_modified_time === 'string' &&
+    payload.source_modified_time.trim()
+      ? payload.source_modified_time.trim()
+      : typeof rawDoc?.metadata?.source_modified_time === 'string' &&
+        rawDoc.metadata.source_modified_time.trim()
+      ? rawDoc.metadata.source_modified_time.trim()
+      : null;
+
+  const chunksCreated =
+    typeof payload?.chunks_created === 'number'
+      ? payload.chunks_created
+      : typeof rawDoc?.chunk_count === 'number'
+      ? rawDoc.chunk_count
+      : null;
+
+  const mappedDoc: KnowledgeDocument | null = rawDoc
+    ? mapSupabaseKnowledgeDocToFrontend({
+        ...rawDoc,
+        workspace_id: rawDoc.workspace_id || resolvedWorkspaceId,
+        agent_id: rawDoc.agent_id || normalizedAgentId,
+        source_type: rawDoc.source_type || 'google_doc',
+        chunk_count:
+          typeof rawDoc.chunk_count === 'number'
+            ? rawDoc.chunk_count
+            : chunksCreated ?? 0,
+        metadata: {
+          ...(rawDoc.metadata && typeof rawDoc.metadata === 'object'
+            ? rawDoc.metadata
+            : {}),
+          ...(sourceModifiedTime
+            ? { source_modified_time: sourceModifiedTime }
+            : {}),
+          resource_id:
+            rawDoc.metadata?.resource_id ||
+            rawDoc.metadata?.google_resource_id ||
+            normalizedResourceId,
+          connection_id:
+            rawDoc.metadata?.connection_id || normalizedConnectionId,
+        },
+      })
+    : null;
+
+  const returnedStage =
+    typeof payload?.stage === 'string' && payload.stage.trim()
+      ? payload.stage.trim()
+      : null;
+  const returnedDocumentId =
+    typeof payload?.document_id === 'string' && payload.document_id.trim()
+      ? payload.document_id.trim()
+      : mappedDoc?.id || null;
+  const returnedStatus =
+    normalizeKnowledgeDocStatus(rawDoc?.status) ||
+    normalizeKnowledgeDocStatus(payload?.status) ||
+    mappedDoc?.status ||
+    null;
+  const reconnectRequired = Boolean(payload?.reconnect_required);
+
+  if (error || !payload || payload.error || payload.success !== true) {
+    const rawErrMsg =
+      typeof payload?.error === 'string' && payload.error.trim()
+        ? payload.error.trim()
+        : typeof payload?.message === 'string' && payload.message.trim()
+        ? payload.message.trim()
+        : error?.message ||
+          'Failed to sync Google Doc to Knowledge Base.';
+
+    const finalErrMsg =
+      reconnectRequired && !rawErrMsg.toLowerCase().includes('reconnect')
+        ? `${rawErrMsg} Please reconnect Google Docs to grant the required read-only permissions.`
+        : rawErrMsg;
+
+    return baseFailure(finalErrMsg, {
+      workspaceId: resolvedWorkspaceId,
+      document: mappedDoc,
+      documentId: returnedDocumentId,
+      status: returnedStatus,
+      sourceModifiedTime,
+      chunksCreated,
+      stage: returnedStage,
+      reconnectRequired,
+    });
+  }
+
+  // Strict readiness contract: ONLY report ready success when success === true AND document.status === 'ready'
+  const isReady = Boolean(payload.success === true && returnedStatus === 'ready');
+
+  if (!isReady) {
+    const nonReadyMsg =
+      typeof rawDoc?.error_message === 'string' && rawDoc.error_message.trim()
+        ? rawDoc.error_message.trim()
+        : returnedStatus === 'failed'
+        ? 'Google Doc sync failed during Knowledge Base processing.'
+        : `Google Doc sync returned status "${returnedStatus || 'unknown'}" (not ready yet).`;
+
+    return {
+      success: false,
+      isReady: false,
+      action: 'sync_google_doc',
+      workspaceId: resolvedWorkspaceId,
+      connectionId: normalizedConnectionId,
+      resourceId: normalizedResourceId,
+      agentId: normalizedAgentId,
+      document: mappedDoc,
+      documentId: returnedDocumentId,
+      status: returnedStatus,
+      sourceModifiedTime,
+      chunksCreated,
+      error: returnedStatus === 'failed' ? nonReadyMsg : null,
+      stage: returnedStage,
+      reconnectRequired,
+    };
+  }
+
+  return {
+    success: true,
+    isReady: true,
+    action: 'sync_google_doc',
+    workspaceId: resolvedWorkspaceId,
+    connectionId: normalizedConnectionId,
+    resourceId: normalizedResourceId,
+    agentId: normalizedAgentId,
+    document: mappedDoc,
+    documentId: returnedDocumentId,
+    status: 'ready',
+    sourceModifiedTime,
+    chunksCreated,
+    error: null,
+    stage: returnedStage,
+    reconnectRequired: false,
+  };
 }
 
 /**

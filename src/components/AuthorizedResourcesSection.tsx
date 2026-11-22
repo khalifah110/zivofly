@@ -121,6 +121,7 @@ interface AuthorizedResourcesSectionProps {
   onRefreshResources: () => void;
   onConnectService: () => void;
   onClearError: () => void;
+  renderResourceExtra?: (resource: GoogleAuthorizedResource) => React.ReactNode;
 }
 
 export function renderResourceMimeIcon(mimeType: string) {
@@ -321,6 +322,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
   onRefreshResources,
   onConnectService,
   onClearError,
+  renderResourceExtra,
 }) => {
   const copy = SERVICE_UI_COPY[service];
   const pickerEnvStatus = logGooglePickerConfigDiagnostic();
@@ -550,95 +552,103 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                     ? selectedAgentResourceIds.includes(resource.id)
                     : true;
 
+                  const extraContent = renderResourceExtra
+                    ? renderResourceExtra(resource)
+                    : null;
+
                   return (
                     <div
                       key={resource.id}
-                      className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-muted/30 transition-colors"
+                      className="p-3 space-y-2.5 hover:bg-muted/30 transition-colors"
                     >
-                      <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-                        {onToggleAgentResource && (
-                          <input
-                            type="checkbox"
-                            checked={isAssignedToAgent}
-                            onChange={() => onToggleAgentResource(resource.id)}
-                            disabled={isPickerActionBusy}
-                            aria-label={`Allow agent to access ${resource.name}`}
-                            className="size-3.5 rounded border-border text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0 mt-1 sm:mt-0"
-                          />
-                        )}
-
-                        <div className="flex size-8 items-center justify-center rounded-lg border border-border bg-card shrink-0">
-                          {renderResourceMimeIcon(resource.mime_type)}
-                        </div>
-
-                        <div className="min-w-0 space-y-0.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs font-medium text-foreground truncate max-w-[260px] sm:max-w-[340px]">
-                              {resource.name}
-                            </span>
-                            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
-                              {resource.resource_type}
-                            </span>
-                            {resource.status === 'active' && (
-                              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                                <CheckCircle2 className="size-2.5" />
-                                <span>Authorized</span>
-                              </span>
-                            )}
-                            {pendingSyncBadgeLabel && (
-                              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
-                                <Clock className="size-2.5" />
-                                <span>{pendingSyncBadgeLabel}</span>
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
-                            <span>
-                              Selected{' '}
-                              {formatSelectionDate(
-                                resource.selected_at || resource.created_at
-                              )}
-                            </span>
-                            {isFolder && (
-                              <span className="text-amber-600 dark:text-amber-400">
-                                • Folder only (nested files require individual selection)
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-                        {resource.web_view_link && (
-                          <a
-                            href={resource.web_view_link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-accent transition-colors"
-                          >
-                            <span>Open</span>
-                            <ExternalLink className="size-3" />
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          disabled={isPickerActionBusy}
-                          onClick={() => onRequestRemoveResource(resource)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-transparent px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {isRemovingThis ? (
-                            <>
-                              <Loader2 className="size-3 animate-spin" />
-                              <span>Removing…</span>
-                            </>
-                          ) : (
-                            <>
-                              <Trash2 className="size-3" />
-                              <span>Remove</span>
-                            </>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+                          {onToggleAgentResource && (
+                            <input
+                              type="checkbox"
+                              checked={isAssignedToAgent}
+                              onChange={() => onToggleAgentResource(resource.id)}
+                              disabled={isPickerActionBusy}
+                              aria-label={`Allow agent to access ${resource.name}`}
+                              className="size-3.5 rounded border-border text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0 mt-1 sm:mt-0"
+                            />
                           )}
-                        </button>
+
+                          <div className="flex size-8 items-center justify-center rounded-lg border border-border bg-card shrink-0">
+                            {renderResourceMimeIcon(resource.mime_type)}
+                          </div>
+
+                          <div className="min-w-0 space-y-0.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-medium text-foreground truncate max-w-[260px] sm:max-w-[340px]">
+                                {resource.name}
+                              </span>
+                              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
+                                {resource.resource_type}
+                              </span>
+                              {resource.status === 'active' && (
+                                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                  <CheckCircle2 className="size-2.5" />
+                                  <span>Authorized</span>
+                                </span>
+                              )}
+                              {pendingSyncBadgeLabel && (
+                                <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                                  <Clock className="size-2.5" />
+                                  <span>{pendingSyncBadgeLabel}</span>
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                              <span>
+                                Selected{' '}
+                                {formatSelectionDate(
+                                  resource.selected_at || resource.created_at
+                                )}
+                              </span>
+                              {isFolder && (
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  • Folder only (nested files require individual selection)
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                          {resource.web_view_link && (
+                            <a
+                              href={resource.web_view_link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-accent transition-colors"
+                            >
+                              <span>Open</span>
+                              <ExternalLink className="size-3" />
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isPickerActionBusy}
+                            onClick={() => onRequestRemoveResource(resource)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-transparent px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isRemovingThis ? (
+                              <>
+                                <Loader2 className="size-3 animate-spin" />
+                                <span>Removing…</span>
+                              </>
+                            ) : (
+                              <>
+                                <Trash2 className="size-3" />
+                                <span>Remove</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
+
+                      {extraContent}
                     </div>
                   );
                 })}

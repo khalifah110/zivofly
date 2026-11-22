@@ -49,8 +49,10 @@ export interface UseGoogleSelectedResourcesReturn {
   removingResourceId: string | null;
   resourcesError: string | null;
   clearResourcesError: () => void;
-  refreshResources: () => Promise<void>;
-  selectResources: (initialView?: GooglePickerInitialView) => Promise<void>;
+  refreshResources: () => Promise<GoogleAuthorizedResource[]>;
+  selectResources: (
+    initialView?: GooglePickerInitialView
+  ) => Promise<GoogleAuthorizedResource[]>;
   removeResource: (resource: GoogleAuthorizedResource) => Promise<boolean>;
 }
 
@@ -129,10 +131,12 @@ export function useGoogleSelectedResources({
     setRuntimeMissingScopes([]);
   }, []);
 
-  const refreshResources = useCallback(async () => {
+  const refreshResources = useCallback(async (): Promise<
+    GoogleAuthorizedResource[]
+  > => {
     if (status === 'disconnected' || !connectionId || !workspaceId) {
       resetResourceState();
-      return;
+      return [];
     }
 
     // Do not try to load resources if authorization is expired until user reconnects
@@ -141,7 +145,7 @@ export function useGoogleSelectedResources({
       setSelectedCount(0);
       setActiveCount(0);
       setSelectionRequired(false);
-      return;
+      return [];
     }
 
     setIsLoadingResources(true);
@@ -168,6 +172,8 @@ export function useGoogleSelectedResources({
       if (onResourcesUpdatedRef.current) {
         onResourcesUpdatedRef.current(activeResources.map((r) => r.id));
       }
+
+      return activeResources;
     } catch (err: any) {
       const msg =
         err?.message ||
@@ -179,6 +185,7 @@ export function useGoogleSelectedResources({
       setResources([]);
       setSelectedCount(0);
       setActiveCount(0);
+      return [];
     } finally {
       setIsLoadingResources(false);
     }
@@ -199,9 +206,11 @@ export function useGoogleSelectedResources({
   }, [refreshResources, resetResourceState, connectionScopes]);
 
   const selectResources = useCallback(
-    async (initialView?: GooglePickerInitialView) => {
+    async (
+      initialView?: GooglePickerInitialView
+    ): Promise<GoogleAuthorizedResource[]> => {
       if (isSelectingRef.current || isSavingSelection || removingResourceId) {
-        return;
+        return [];
       }
 
       if (status !== 'connected' || !connectionId) {
@@ -211,7 +220,7 @@ export function useGoogleSelectedResources({
             : `Connect your ${serviceLabel} account before selecting resources.`;
         setResourcesError(msg);
         toast.error(msg);
-        return;
+        return [];
       }
 
       if (needsScopeReauth) {
@@ -220,14 +229,14 @@ export function useGoogleSelectedResources({
           `${serviceLabel} requires updated Google OAuth permissions. Please reconnect ${serviceLabel}.`;
         setResourcesError(msg);
         toast.error(msg, { duration: 7000 });
-        return;
+        return [];
       }
 
       if (!workspaceId) {
         const msg = 'Active workspace ID could not be resolved.';
         setResourcesError(msg);
         toast.error(msg);
-        return;
+        return [];
       }
 
       const effectiveInitialView =
@@ -320,12 +329,12 @@ export function useGoogleSelectedResources({
 
         // Step 4: If customer cancelled, close quietly without any error
         if (pickerResult.cancelled) {
-          return;
+          return [];
         }
 
         if (!pickerResult.files || pickerResult.files.length === 0) {
           toast.info('No files were selected.');
-          return;
+          return [];
         }
 
         // Step 5: Filter and reject disallowed file types before calling save_selected_resources
@@ -338,7 +347,7 @@ export function useGoogleSelectedResources({
             `Selected files are not allowed in ${serviceLabel}.`;
           setResourcesError(rejectMsg);
           toast.error(rejectMsg, { duration: 7000 });
-          return;
+          return [];
         }
 
         if (rejectedFiles.length > 0 && rejectionMessage) {
@@ -379,8 +388,17 @@ export function useGoogleSelectedResources({
         }
 
         // Step 7: Refresh authorized resources list from backend before showing confirmation
-        await refreshResources();
+        const freshResources = await refreshResources();
         toast.success(saveResult.message);
+
+        const pickedFileIdSet = new Set(validFiles.map((f) => f.id));
+        const savedIdSet = new Set(saveResult.savedResources.map((r) => r.id));
+        const matchedResources = freshResources.filter(
+          (r) => savedIdSet.has(r.id) || pickedFileIdSet.has(r.google_file_id)
+        );
+        return matchedResources.length > 0
+          ? matchedResources
+          : saveResult.savedResources;
       } catch (err: any) {
         setIsFetchingPickerToken(false);
         setIsPickerOpen(false);
@@ -399,6 +417,7 @@ export function useGoogleSelectedResources({
         });
         setResourcesError(msg);
         toast.error(msg, { duration: 7000 });
+        return [];
       } finally {
         setIsFetchingPickerToken(false);
         setIsPickerOpen(false);

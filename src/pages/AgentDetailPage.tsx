@@ -62,6 +62,7 @@ import {
   createSupabaseTestConversation,
   deleteSupabaseTestConversation,
   extractEdgeFunctionDiagnosticError,
+  getGoogleWorkspaceIntegrationConnections,
   getSupabaseTestConversationMessages,
   getSupabaseTestConversations,
   getVerifiedSupabaseAccessToken,
@@ -71,6 +72,8 @@ import {
   processKnowledgeDocument,
   saveSupabaseConversationFeedback,
   saveSupabaseTestMessage,
+  startGoogleWorkspaceOAuth,
+  syncGoogleDocToKnowledgeBase,
 } from '../lib/supabaseService';
 import { GoogleSheetToolSection } from '../components/GoogleSheetToolSection';
 import { GoogleWorkspaceSection } from '../components/GoogleWorkspaceSection';
@@ -924,6 +927,129 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
       const msg = err?.message || 'Unable to process document.';
       setKnowledgeError(msg);
       toast.error(msg);
+    }
+  };
+
+  const handleSyncGoogleDocFromList = async (doc: KnowledgeDocument) => {
+    if (processingDocIds.includes(doc.id)) return;
+
+    const meta = doc.metadata || {};
+    const resourceId =
+      (typeof meta.resource_id === 'string' && meta.resource_id.trim()) ||
+      (typeof meta.google_resource_id === 'string' && meta.google_resource_id.trim()) ||
+      (typeof meta.selected_resource_id === 'string' &&
+        meta.selected_resource_id.trim()) ||
+      '';
+
+    if (!isValidUuid(resourceId)) {
+      await handleRetryProcessDoc(doc.id);
+      return;
+    }
+
+    setProcessingDocIds((prev) => (prev.includes(doc.id) ? prev : [...prev, doc.id]));
+    setKnowledgeError(null);
+
+    try {
+      const { workspaceId, agentId: resolvedAgentId } =
+        await resolveKnowledgeWorkspaceAndAgent();
+      const targetAgentId = isValidUuid(doc.agentId || '')
+        ? doc.agentId!
+        : resolvedAgentId;
+
+      let connectionId =
+        typeof meta.connection_id === 'string' ? meta.connection_id.trim() : '';
+
+      if (!isValidUuid(connectionId)) {
+        const { connectionsByService } =
+          await getGoogleWorkspaceIntegrationConnections({
+            workspaceId,
+            agentId: targetAgentId,
+          });
+        connectionId = connectionsByService.google_docs?.id || '';
+      }
+
+      if (!isValidUuid(connectionId)) {
+        const msg =
+          'No active Google Docs connection found in this workspace. Reconnect Google Docs to sync this document.';
+        setKnowledgeError(msg);
+        toast.error(msg, { duration: 7000 });
+        return;
+      }
+
+      const outcome = await syncGoogleDocToKnowledgeBase({
+        workspaceId,
+        connectionId,
+        resourceId,
+        agentId: targetAgentId,
+      });
+
+      // Reload persisted document row from Supabase so local state always reflects backend truth
+      let latestDoc = outcome.document;
+      const targetDocId = outcome.documentId || doc.id;
+      if (supabase && isValidUuid(targetDocId)) {
+        const { data: freshRow } = await supabase
+          .from('knowledge_documents')
+          .select('*')
+          .eq('id', targetDocId)
+          .eq('workspace_id', workspaceId)
+          .maybeSingle();
+        if (freshRow) {
+          latestDoc = mapSupabaseKnowledgeDocToFrontend(freshRow);
+        }
+      }
+
+      if (latestDoc) {
+        updateDocInState(latestDoc, workspaceId);
+      }
+
+      if (outcome.success && outcome.isReady && outcome.status === 'ready') {
+        const count = latestDoc?.chunkCount ?? outcome.chunksCreated ?? 0;
+        toast.success(
+          `"${latestDoc?.name || doc.name}" synced (${count} ${
+            count === 1 ? 'chunk' : 'chunks'
+          }, Ready).`
+        );
+      } else if (outcome.error) {
+        const stageSuffix = outcome.stage ? ` [stage: ${outcome.stage}]` : '';
+        const errText = `${outcome.error}${stageSuffix}`;
+        setKnowledgeError(errText);
+        if (outcome.reconnectRequired) {
+          toast.error(errText, {
+            duration: 9000,
+            action: {
+              label: 'Reconnect',
+              onClick: () => {
+                void startGoogleWorkspaceOAuth({
+                  service: 'google_docs',
+                  workspaceId,
+                  agentId: targetAgentId,
+                  returnTab: 'knowledge',
+                })
+                  .then(({ authorizationUrl }) => {
+                    window.location.href = authorizationUrl;
+                  })
+                  .catch((oauthErr: any) => {
+                    toast.error(
+                      oauthErr?.message || 'Could not start Google Docs reconnect.'
+                    );
+                  });
+              },
+            },
+          });
+        } else {
+          toast.error(errText, { duration: 8000 });
+        }
+      } else {
+        toast.info(
+          `"${latestDoc?.name || doc.name}" status: ${outcome.status || 'queued'}.`
+        );
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Unable to sync Google Doc.';
+      setKnowledgeError(msg);
+      toast.error(msg, { duration: 8000 });
+    } finally {
+      setProcessingDocIds((prev) => prev.filter((id) => id !== doc.id));
     }
   };
 
@@ -2691,6 +2817,17 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                 value={googleWorkspaceConfig}
                 workspaceId={verifiedWorkspaceId || agent?.workspaceId || null}
                 agentId={!isNewAgent ? agent?.id || null : null}
+                agents={agents}
+                onKnowledgeDocSynced={(syncedDoc, targetAgentId) => {
+                  if (!isNewAgent && agent?.id && targetAgentId === agent.id) {
+                    updateDocInState(
+                      syncedDoc,
+                      syncedDoc.workspaceId ||
+                        verifiedWorkspaceId ||
+                        agent.workspaceId
+                    );
+                  }
+                }}
                 onChange={(updated) => {
                   setGoogleWorkspaceConfig(updated);
                   if (updated.sheets) {
@@ -2736,10 +2873,15 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
             ) : (
               <div className="grid gap-3">
                 {docs.map((doc) => {
+                  const isGoogleDoc = doc.sourceType === 'google_doc';
                   const isDocProcessing =
                     doc.status === 'processing' || processingDocIds.includes(doc.id);
-                  const isDocReady = doc.status === 'ready' && (doc.chunkCount ?? 0) > 0;
-                  const isDocFailed = doc.status === 'failed';
+                  const isDocReady = isGoogleDoc
+                    ? doc.status === 'ready' && !isDocProcessing
+                    : doc.status === 'ready' &&
+                      (doc.chunkCount ?? 0) > 0 &&
+                      !isDocProcessing;
+                  const isDocFailed = doc.status === 'failed' && !isDocProcessing;
                   const statusLabel = isDocProcessing
                     ? 'Processing'
                     : isDocReady
@@ -2747,6 +2889,18 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                     : isDocFailed
                     ? 'Failed'
                     : 'Queued';
+                  const formattedSourceModified = (() => {
+                    if (!doc.sourceModifiedTime) return null;
+                    const parsed = new Date(doc.sourceModifiedTime);
+                    if (Number.isNaN(parsed.getTime())) return null;
+                    return parsed.toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    });
+                  })();
 
                   return (
                     <div
@@ -2755,7 +2909,11 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                     >
                       <div className="flex items-start gap-3 min-w-0 flex-1">
                         <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0 ring-1 ring-primary/20">
-                          <FileText className="size-4" />
+                          {isGoogleDoc ? (
+                            <GoogleDocsLogo className="size-4" />
+                          ) : (
+                            <FileText className="size-4" />
+                          )}
                         </div>
                         <div className="space-y-1.5 min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -2768,7 +2926,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                             </span>
                             {doc.sourceType && (
                               <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground border border-border shrink-0">
-                                {doc.sourceType}
+                                {isGoogleDoc ? 'Google Doc' : doc.sourceType}
                               </span>
                             )}
                             {isDocReady && (
@@ -2791,9 +2949,16 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                               <span>{statusLabel}</span>
                             </span>
                           </div>
-                          <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                            {doc.content}
-                          </p>
+                          {formattedSourceModified && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Source modified {formattedSourceModified}
+                            </p>
+                          )}
+                          {doc.content && (
+                            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                              {doc.content}
+                            </p>
+                          )}
                           {isDocFailed && doc.errorMessage && (
                             <p className="text-[11px] text-destructive font-medium leading-snug pt-0.5">
                               Error: {doc.errorMessage}
@@ -2802,20 +2967,34 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {(!isDocReady || isDocFailed) && (
+                        {(isGoogleDoc || !isDocReady || isDocFailed) && (
                           <button
                             type="button"
-                            onClick={() => handleRetryProcessDoc(doc.id)}
+                            onClick={() =>
+                              isGoogleDoc
+                                ? void handleSyncGoogleDocFromList(doc)
+                                : void handleRetryProcessDoc(doc.id)
+                            }
                             disabled={isDocProcessing || deletingDocId === doc.id}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 cursor-pointer"
-                            title="Process chunks and generate embeddings"
+                            title={
+                              isGoogleDoc
+                                ? 'Re-fetch Google Doc and update Knowledge Base chunks'
+                                : 'Process chunks and generate embeddings'
+                            }
                           >
                             <RefreshCw
                               className={`size-3.5 ${
                                 isDocProcessing ? 'animate-spin' : ''
                               }`}
                             />
-                            <span>{isDocFailed ? 'Retry' : 'Process'}</span>
+                            <span>
+                              {isDocFailed
+                                ? 'Retry'
+                                : isGoogleDoc
+                                ? 'Sync'
+                                : 'Process'}
+                            </span>
                           </button>
                         )}
                         <button

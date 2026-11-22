@@ -107,6 +107,27 @@ export interface KnowledgeDocument {
   createdAt: string;
   updatedAt?: string;
   fileSize?: string;
+  sourceUrl?: string | null;
+  sourceModifiedTime?: string | null;
+  metadata?: Record<string, any> | null;
+}
+
+export interface GoogleDocSyncOutcome {
+  success: boolean;
+  isReady: boolean;
+  action: 'sync_google_doc';
+  workspaceId: string;
+  connectionId: string;
+  resourceId: string;
+  agentId: string;
+  document: KnowledgeDocument | null;
+  documentId: string | null;
+  status: KnowledgeDocumentStatus | null;
+  sourceModifiedTime: string | null;
+  chunksCreated: number | null;
+  error: string | null;
+  stage: string | null;
+  reconnectRequired: boolean;
 }
 
 export interface GoogleSheetColumn {
