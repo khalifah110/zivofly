@@ -148,8 +148,11 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     message: string;
   } | null>(null);
 
-  // Real backend knowledge_documents state strictly scoped to the currently open agent
-  const [agentGoogleDocs, setAgentGoogleDocs] = useState<KnowledgeDocument[]>([]);
+  // Real backend knowledge_documents state for Google Docs in this workspace
+  // Used to strictly isolate each agent's own Google Docs and hide docs owned by other agents
+  const [workspaceGoogleDocs, setWorkspaceGoogleDocs] = useState<
+    KnowledgeDocument[]
+  >([]);
   const [isLoadingSyncedDocs, setIsLoadingSyncedDocs] = useState<boolean>(false);
   const [syncingResourceIds, setSyncingResourceIds] = useState<
     Record<string, boolean>
@@ -214,18 +217,34 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   const lastError =
     status !== 'disconnected' ? docsRecord?.last_error || null : null;
 
+  const agentGoogleDocs = useMemo(
+    () =>
+      agentId && isValidUuid(agentId)
+        ? workspaceGoogleDocs.filter((doc) => doc.agentId === agentId)
+        : [],
+    [workspaceGoogleDocs, agentId]
+  );
+
+  const otherAgentGoogleDocs = useMemo(
+    () =>
+      workspaceGoogleDocs.filter(
+        (doc) => Boolean(doc.agentId) && doc.agentId !== agentId
+      ),
+    [workspaceGoogleDocs, agentId]
+  );
+
   const refreshSyncedGoogleDocs = useCallback(
     async (wsId?: string | null): Promise<KnowledgeDocument[]> => {
       const targetWsId = wsId || effectiveWorkspaceId;
-      if (!targetWsId || !isValidUuid(targetWsId) || !agentId || !isValidUuid(agentId)) {
-        setAgentGoogleDocs([]);
+      if (!targetWsId || !isValidUuid(targetWsId)) {
+        setWorkspaceGoogleDocs([]);
         return [];
       }
 
       setIsLoadingSyncedDocs(true);
       try {
-        const rows = await getWorkspaceGoogleDocKnowledgeRecords(targetWsId, agentId);
-        setAgentGoogleDocs(rows);
+        const rows = await getWorkspaceGoogleDocKnowledgeRecords(targetWsId);
+        setWorkspaceGoogleDocs(rows);
         return rows;
       } catch {
         return [];
@@ -233,7 +252,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         setIsLoadingSyncedDocs(false);
       }
     },
-    [effectiveWorkspaceId, agentId]
+    [effectiveWorkspaceId]
   );
 
   useEffect(() => {
@@ -358,19 +377,15 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     };
   }, [workspaceId, agentId, applyConnectionsToParent]);
 
-  const handleToggleAgentDocResource = useCallback(
+  const recordResourceForCurrentAgent = useCallback(
     (resourceId: string) => {
       if (!onChangeRef.current) return;
-      const activeIds = docsResources.resources.map((r) => r.id);
       const currentSelected = Array.isArray(
         valueRef.current?.docs?.selectedResourceIds
       )
         ? valueRef.current!.docs!.selectedResourceIds!
-        : activeIds;
-
-      const nextSelected = currentSelected.includes(resourceId)
-        ? currentSelected.filter((id) => id !== resourceId)
-        : [...currentSelected, resourceId];
+        : [];
+      if (currentSelected.includes(resourceId)) return;
 
       onChangeRef.current({
         ...(valueRef.current || {}),
@@ -379,11 +394,11 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             enabled: status === 'connected',
             status,
           }),
-          selectedResourceIds: nextSelected,
+          selectedResourceIds: [...currentSelected, resourceId],
         },
       });
     },
-    [docsResources.resources, status]
+    [status]
   );
 
   const handleConnectDocs = async () => {
@@ -650,10 +665,38 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       return;
     }
 
+    const latestWorkspaceDocs = await refreshSyncedGoogleDocs(effectiveWorkspaceId);
+
     for (const resource of pickedResources) {
+      const ownedByCurrent = latestWorkspaceDocs.some(
+        (doc) => doc.agentId === agentId && matchesGoogleResource(doc, resource)
+      );
+      const ownedByOther = latestWorkspaceDocs.some(
+        (doc) =>
+          Boolean(doc.agentId) &&
+          doc.agentId !== agentId &&
+          matchesGoogleResource(doc, resource)
+      );
+
+      if (ownedByOther && !ownedByCurrent) {
+        toast.error(
+          `"${resource.name}" is already assigned to another agent. Each Google Doc can only be accessed by the agent where it was selected.`,
+          { duration: 8000 }
+        );
+        continue;
+      }
+
+      recordResourceForCurrentAgent(resource.id);
       await handleSyncResourceForCurrentAgent(resource);
     }
-  }, [docsResources, agentId, handleSyncResourceForCurrentAgent]);
+  }, [
+    docsResources,
+    agentId,
+    effectiveWorkspaceId,
+    refreshSyncedGoogleDocs,
+    recordResourceForCurrentAgent,
+    handleSyncResourceForCurrentAgent,
+  ]);
 
   const renderResourceSyncExtra = useCallback(
     (resource: GoogleAuthorizedResource) => {
@@ -892,9 +935,27 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     ]
   );
 
+  // Only show Google Docs belonging to the currently open agent (or not yet assigned to any other agent).
+  // Any Google Doc already owned by another agent is completely hidden here.
+  const visibleAgentResources = useMemo(() => {
+    return docsResources.resources.filter((resource) => {
+      const ownedByCurrent = agentGoogleDocs.some((doc) =>
+        matchesGoogleResource(doc, resource)
+      );
+      if (ownedByCurrent) return true;
+
+      const ownedByOther = otherAgentGoogleDocs.some((doc) =>
+        matchesGoogleResource(doc, resource)
+      );
+      if (ownedByOther) return false;
+
+      return true;
+    });
+  }, [docsResources.resources, agentGoogleDocs, otherAgentGoogleDocs]);
+
   const readyDocsCount = useMemo(() => {
     const readyResourceIds = new Set<string>();
-    for (const res of docsResources.resources) {
+    for (const res of visibleAgentResources) {
       const hasReady = agentGoogleDocs.some(
         (doc) => doc.status === 'ready' && matchesGoogleResource(doc, res)
       );
@@ -903,7 +964,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       }
     }
     return readyResourceIds.size;
-  }, [docsResources.resources, agentGoogleDocs]);
+  }, [visibleAgentResources, agentGoogleDocs]);
 
   const isBusy = isConnecting || isDisconnecting;
 
@@ -1055,20 +1116,16 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
                 <span className="text-xs font-bold text-foreground">
                   Google Docs
                 </span>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  <CheckCircle2 className="size-2.5" />
-                  <span>Read-only connected</span>
-                </span>
                 {docsResources.needsScopeReauth && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                     Reauthorization required
                   </span>
                 )}
-                {!docsResources.needsScopeReauth && docsResources.activeCount > 0 && (
+                {!docsResources.needsScopeReauth && visibleAgentResources.length > 0 && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-muted text-foreground/85 border border-border">
                     <span>
-                      {docsResources.activeCount}{' '}
-                      {docsResources.activeCount === 1 ? 'Doc' : 'Docs'} selected
+                      {visibleAgentResources.length}{' '}
+                      {visibleAgentResources.length === 1 ? 'Doc' : 'Docs'} selected
                       {readyDocsCount > 0 ? ` · ${readyDocsCount} Ready` : ''}
                     </span>
                   </span>
@@ -1110,9 +1167,9 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
           <AuthorizedResourcesSection
             service="google_docs"
             status={status}
-            resources={docsResources.resources}
-            selectedCount={docsResources.selectedCount}
-            activeCount={docsResources.activeCount}
+            resources={visibleAgentResources}
+            selectedCount={visibleAgentResources.length}
+            activeCount={visibleAgentResources.length}
             needsScopeReauth={docsResources.needsScopeReauth}
             scopeReauthMessage={docsResources.scopeReauthMessage}
             isLoadingResources={docsResources.isLoadingResources}
@@ -1122,12 +1179,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             removingResourceId={docsResources.removingResourceId}
             resourcesError={docsResources.resourcesError}
             isBusyConnectingOrDisconnecting={isBusy}
-            selectedAgentResourceIds={
-              onChange ? value?.docs?.selectedResourceIds : undefined
-            }
-            onToggleAgentResource={
-              onChange ? handleToggleAgentDocResource : undefined
-            }
             onSelectResources={() => void handleSelectDocs()}
             onRequestRemoveResource={(res) => setResourceToRemove(res)}
             onRefreshResources={() => {
