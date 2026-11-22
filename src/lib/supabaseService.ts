@@ -16,6 +16,11 @@ import {
   GoogleAuthorizedResource,
   GoogleSelectedResourcesResult,
   GooglePickerTokenPayload,
+  GoogleSheetsToolKey,
+  GoogleSpreadsheetTab,
+  ListSpreadsheetTabsResult,
+  AgentSheetTabsResult,
+  ClassifiedGoogleSheetTabError,
   OwnerWorkspace,
 } from '../types';
 import { isCorruptedDocxText } from './fileTextExtractor';
@@ -5893,6 +5898,569 @@ export async function syncGoogleDocToKnowledgeBase(params: {
     error: null,
     stage: returnedStage,
     reconnectRequired: false,
+  };
+}
+
+export const GOOGLE_SHEETS_TOOL_KEYS: readonly GoogleSheetsToolKey[] = [
+  'sheets.read',
+  'sheets.lookup',
+  'sheets.append_row',
+  'sheets.update_row',
+] as const;
+
+export class GoogleSheetTabActionError extends Error {
+  httpStatus?: number;
+  stage?: string | null;
+  code?: string | null;
+  reconnectRequired: boolean;
+  rawPayload?: any;
+
+  constructor(
+    message: string,
+    opts?: {
+      httpStatus?: number;
+      stage?: string | null;
+      code?: string | null;
+      reconnectRequired?: boolean;
+      rawPayload?: any;
+    }
+  ) {
+    super(message);
+    this.name = 'GoogleSheetTabActionError';
+    this.httpStatus = opts?.httpStatus;
+    this.stage = opts?.stage ?? null;
+    this.code = opts?.code ?? null;
+    this.reconnectRequired = Boolean(opts?.reconnectRequired);
+    this.rawPayload = opts?.rawPayload;
+  }
+}
+
+function normalizeSpreadsheetTab(raw: any, fallbackIndex: number): GoogleSpreadsheetTab | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rawId = raw.sheet_id ?? raw.sheetId;
+  const numericId =
+    typeof rawId === 'number'
+      ? rawId
+      : typeof rawId === 'string' && rawId.trim() !== '' && /^-?\d+$/.test(rawId.trim())
+      ? Number(rawId.trim())
+      : NaN;
+
+  if (!Number.isInteger(numericId)) return null;
+
+  const title =
+    typeof raw.title === 'string' && raw.title.trim().length > 0
+      ? raw.title.trim()
+      : `Sheet ${numericId}`;
+
+  const rawIndex = raw.index;
+  const index =
+    typeof rawIndex === 'number' && Number.isFinite(rawIndex)
+      ? rawIndex
+      : fallbackIndex;
+
+  return {
+    sheet_id: numericId,
+    title,
+    index,
+    hidden: Boolean(raw.hidden),
+  };
+}
+
+function extractNumericSheetIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<number>();
+  const result: number[] = [];
+  for (const item of raw) {
+    let candidate: number = NaN;
+    if (typeof item === 'number') {
+      candidate = item;
+    } else if (typeof item === 'string' && /^-?\d+$/.test(item.trim())) {
+      candidate = Number(item.trim());
+    } else if (item && typeof item === 'object' && 'sheet_id' in item) {
+      const nested = (item as any).sheet_id;
+      if (typeof nested === 'number') {
+        candidate = nested;
+      }
+    }
+    if (Number.isInteger(candidate) && !seen.has(candidate)) {
+      seen.add(candidate);
+      result.push(candidate);
+    }
+  }
+  return result;
+}
+
+export function classifyGoogleSheetTabError(
+  err: unknown,
+  context: 'list' | 'get' | 'save' = 'list'
+): ClassifiedGoogleSheetTabError {
+  const actionErr = err instanceof GoogleSheetTabActionError ? err : null;
+  const rawMessage =
+    (err instanceof Error && err.message.trim()) ||
+    (typeof err === 'string' && err.trim()) ||
+    (context === 'save'
+      ? 'Could not save spreadsheet tab selection.'
+      : 'Could not load spreadsheet tabs.');
+
+  const status = actionErr?.httpStatus;
+  const lower = [
+    rawMessage,
+    actionErr?.code || '',
+    actionErr?.stage || '',
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    lower.includes('frontend_session') ||
+    lower.includes('auth_token_expired') ||
+    lower.includes('invalid_user_jwt') ||
+    lower.includes('authentication required') ||
+    lower.includes('supabase session') ||
+    lower.includes('sign in again')
+  ) {
+    return {
+      category: 'session_expired',
+      title: 'Zivofly session expired',
+      message: rawMessage,
+      reconnectRequired: false,
+      shouldRefreshTabs: false,
+    };
+  }
+
+  if (
+    actionErr?.reconnectRequired ||
+    isGoogleScopeReauthError(rawMessage) ||
+    lower.includes('reconnect_required') ||
+    lower.includes('reconnect') ||
+    lower.includes('reauth') ||
+    lower.includes('invalid_grant') ||
+    lower.includes('token expired') ||
+    lower.includes('authorization expired') ||
+    lower.includes('oauth') ||
+    lower.includes('refresh token') ||
+    lower.includes('unauthenticated') ||
+    status === 401
+  ) {
+    return {
+      category: 'expired_google_auth',
+      title: 'Google Sheets authorization expired',
+      message: rawMessage,
+      reconnectRequired: true,
+      shouldRefreshTabs: false,
+    };
+  }
+
+  if (
+    lower.includes('hidden') ||
+    lower.includes('sheet_id') ||
+    lower.includes('sheet id') ||
+    lower.includes('selected tab') ||
+    lower.includes('tab ') ||
+    lower.includes('tabs ') ||
+    lower.includes('no longer exists') ||
+    lower.includes('missing sheet') ||
+    lower.includes('unknown sheet') ||
+    lower.includes('invalid sheet')
+  ) {
+    return {
+      category: 'deleted_tab',
+      title: 'Spreadsheet tab unavailable or hidden',
+      message: rawMessage,
+      reconnectRequired: false,
+      shouldRefreshTabs: true,
+    };
+  }
+
+  if (
+    status === 403 ||
+    status === 404 ||
+    lower.includes('spreadsheet') ||
+    lower.includes('file not found') ||
+    lower.includes('not found') ||
+    lower.includes('trashed') ||
+    lower.includes('deleted') ||
+    lower.includes('inaccessible') ||
+    lower.includes('permission denied') ||
+    lower.includes('access denied') ||
+    lower.includes('forbidden')
+  ) {
+    return {
+      category: 'inaccessible_spreadsheet',
+      title: 'Spreadsheet inaccessible or deleted',
+      message: rawMessage,
+      reconnectRequired: false,
+      shouldRefreshTabs: false,
+    };
+  }
+
+  if (context === 'save') {
+    return {
+      category: 'save_failure',
+      title: 'Failed to save tab selection',
+      message: rawMessage,
+      reconnectRequired: false,
+      shouldRefreshTabs: false,
+    };
+  }
+
+  return {
+    category: 'load_failure',
+    title: 'Failed to load spreadsheet tabs',
+    message: rawMessage,
+    reconnectRequired: false,
+    shouldRefreshTabs: true,
+  };
+}
+
+async function invokeGoogleSheetsTabAction(params: {
+  action: 'list_spreadsheet_tabs' | 'get_agent_sheet_tabs' | 'save_agent_sheet_tabs';
+  workspaceId?: string | null;
+  connectionId: string;
+  resourceId: string;
+  agentId?: string | null;
+  selectedSheetIds?: number[];
+}): Promise<{
+  payload: any;
+  workspaceId: string;
+  connectionId: string;
+  resourceId: string;
+}> {
+  if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new GoogleSheetTabActionError(
+      'Supabase client is not configured (missing project URL or anon key).'
+    );
+  }
+
+  const normalizedConnectionId =
+    typeof params.connectionId === 'string' ? params.connectionId.trim() : '';
+  const normalizedResourceId =
+    typeof params.resourceId === 'string' ? params.resourceId.trim() : '';
+  const normalizedAgentId =
+    typeof params.agentId === 'string' ? params.agentId.trim() : '';
+
+  if (!isValidUuid(normalizedConnectionId)) {
+    throw new GoogleSheetTabActionError(
+      'Missing or invalid Google Sheets connection ID. Connect Google Sheets first.'
+    );
+  }
+
+  if (!isValidUuid(normalizedResourceId)) {
+    throw new GoogleSheetTabActionError(
+      'Missing or invalid selected spreadsheet resource ID.'
+    );
+  }
+
+  if (
+    (params.action === 'get_agent_sheet_tabs' ||
+      params.action === 'save_agent_sheet_tabs') &&
+    !isValidUuid(normalizedAgentId)
+  ) {
+    throw new GoogleSheetTabActionError(
+      'Save this agent first before loading or saving per-agent Google Sheets tab selections.'
+    );
+  }
+
+  let resolvedWorkspaceId = '';
+  let accessToken = '';
+  try {
+    const resolved = await resolveActiveGoogleWorkspaceId({
+      workspaceId: params.workspaceId,
+      agentId: isValidUuid(normalizedAgentId) ? normalizedAgentId : undefined,
+    });
+    resolvedWorkspaceId = resolved.workspaceId;
+    accessToken = resolved.accessToken;
+  } catch (authErr: any) {
+    throw new GoogleSheetTabActionError(
+      authErr?.message ||
+        'Your Zivofly login session could not be verified. Please sign in again and retry.'
+    );
+  }
+
+  if (!isValidUuid(resolvedWorkspaceId)) {
+    throw new GoogleSheetTabActionError(
+      'Could not resolve a valid active workspace ID.'
+    );
+  }
+
+  const requestBody: Record<string, any> = {
+    action: params.action,
+    workspace_id: resolvedWorkspaceId,
+    connection_id: normalizedConnectionId,
+    resource_id: normalizedResourceId,
+  };
+
+  if (
+    params.action === 'get_agent_sheet_tabs' ||
+    params.action === 'save_agent_sheet_tabs'
+  ) {
+    requestBody.agent_id = normalizedAgentId;
+  }
+
+  if (params.action === 'save_agent_sheet_tabs') {
+    requestBody.selected_sheet_ids = extractNumericSheetIds(
+      params.selectedSheetIds ?? []
+    );
+  }
+
+  const { data, error, response } = await supabase.functions.invoke(
+    'google_workspace',
+    {
+      headers: accessToken
+        ? { Authorization: `Bearer ${accessToken}` }
+        : undefined,
+      body: requestBody,
+    }
+  );
+
+  // Extract structured JSON payload even when the Edge Function returns a non-2xx HTTP status
+  let payload: any = data && typeof data === 'object' ? data : null;
+  if (!payload && response) {
+    try {
+      payload = await response.clone().json();
+    } catch {
+      payload = null;
+    }
+  }
+  if (!payload && error && typeof (error as any)?.context?.json === 'function') {
+    try {
+      payload = await (error as any).context.json();
+    } catch {
+      payload = null;
+    }
+  }
+
+  const httpStatus =
+    typeof response?.status === 'number'
+      ? response.status
+      : typeof (error as any)?.context?.status === 'number'
+      ? (error as any).context.status
+      : undefined;
+
+  if (error || !payload || payload.error || payload.success !== true) {
+    const backendErrorMsg =
+      typeof payload?.error === 'string' && payload.error.trim()
+        ? payload.error.trim()
+        : typeof payload?.message === 'string' && payload.message.trim()
+        ? payload.message.trim()
+        : typeof payload?.details === 'string' && payload.details.trim()
+        ? payload.details.trim()
+        : typeof payload?.reason === 'string' && payload.reason.trim()
+        ? payload.reason.trim()
+        : error?.message && error.message !== 'Edge Function returned a non-2xx status code'
+        ? error.message
+        : `Google Sheets request (${params.action}) failed${
+            httpStatus ? ` (HTTP ${httpStatus})` : ''
+          }.`;
+
+    throw new GoogleSheetTabActionError(backendErrorMsg, {
+      httpStatus,
+      stage: typeof payload?.stage === 'string' ? payload.stage : null,
+      code: typeof payload?.code === 'string' ? payload.code : null,
+      reconnectRequired: Boolean(
+        payload?.reconnect_required ||
+          payload?.reauth_required ||
+          isGoogleScopeReauthError(backendErrorMsg)
+      ),
+      rawPayload: payload,
+    });
+  }
+
+  return {
+    payload,
+    workspaceId: resolvedWorkspaceId,
+    connectionId: normalizedConnectionId,
+    resourceId: normalizedResourceId,
+  };
+}
+
+/**
+ * Lists all tabs (including hidden state) for a selected Google Sheets spreadsheet
+ * via `google_workspace` (`action: "list_spreadsheet_tabs"`).
+ */
+export async function listSpreadsheetTabs(params: {
+  workspaceId?: string | null;
+  connectionId: string;
+  resourceId: string;
+  agentId?: string | null;
+}): Promise<ListSpreadsheetTabsResult> {
+  const { payload, resourceId } = await invokeGoogleSheetsTabAction({
+    action: 'list_spreadsheet_tabs',
+    workspaceId: params.workspaceId,
+    connectionId: params.connectionId,
+    resourceId: params.resourceId,
+    agentId: params.agentId,
+  });
+
+  const rawTabs = Array.isArray(payload.tabs) ? payload.tabs : [];
+  const tabs: GoogleSpreadsheetTab[] = rawTabs
+    .map((tab: any, idx: number) => normalizeSpreadsheetTab(tab, idx))
+    .filter((tab: GoogleSpreadsheetTab | null): tab is GoogleSpreadsheetTab =>
+      Boolean(tab)
+    )
+    .sort((a: GoogleSpreadsheetTab, b: GoogleSpreadsheetTab) => a.index - b.index);
+
+  return {
+    success: true,
+    spreadsheet_id:
+      typeof payload.spreadsheet_id === 'string' ? payload.spreadsheet_id : '',
+    spreadsheet_title:
+      typeof payload.spreadsheet_title === 'string' &&
+      payload.spreadsheet_title.trim()
+        ? payload.spreadsheet_title.trim()
+        : 'Untitled spreadsheet',
+    resource_id:
+      typeof payload.resource_id === 'string' && payload.resource_id.trim()
+        ? payload.resource_id.trim()
+        : resourceId,
+    tabs,
+  };
+}
+
+/**
+ * Loads the saved Google Sheets tab allowlist for a specific agent and spreadsheet
+ * via `google_workspace` (`action: "get_agent_sheet_tabs"`).
+ * Strictly scoped to `agentId`; never falls back to another agent's configuration.
+ */
+export async function getAgentSheetTabs(params: {
+  workspaceId?: string | null;
+  agentId: string;
+  connectionId: string;
+  resourceId: string;
+}): Promise<AgentSheetTabsResult> {
+  const normalizedAgentId = params.agentId.trim();
+  const { payload, workspaceId, connectionId, resourceId } =
+    await invokeGoogleSheetsTabAction({
+      action: 'get_agent_sheet_tabs',
+      workspaceId: params.workspaceId,
+      agentId: normalizedAgentId,
+      connectionId: params.connectionId,
+      resourceId: params.resourceId,
+    });
+
+  // Extract strictly numeric sheet_id values; default to [] (never grant all tabs by default)
+  const rawSelectedIds =
+    payload.selected_sheet_ids ??
+    payload.configuration?.selected_sheet_ids ??
+    payload.config?.selected_sheet_ids ??
+    payload.selected_tabs ??
+    [];
+
+  const selectedSheetIds = extractNumericSheetIds(rawSelectedIds);
+
+  const selectedTabs = Array.isArray(payload.selected_tabs)
+    ? payload.selected_tabs
+        .map((t: any, idx: number) => normalizeSpreadsheetTab(t, idx))
+        .filter((t: GoogleSpreadsheetTab | null): t is GoogleSpreadsheetTab =>
+          Boolean(t)
+        )
+    : undefined;
+
+  return {
+    success: true,
+    workspace_id:
+      typeof payload.workspace_id === 'string' && payload.workspace_id.trim()
+        ? payload.workspace_id.trim()
+        : workspaceId,
+    agent_id:
+      typeof payload.agent_id === 'string' && payload.agent_id.trim()
+        ? payload.agent_id.trim()
+        : normalizedAgentId,
+    connection_id:
+      typeof payload.connection_id === 'string' && payload.connection_id.trim()
+        ? payload.connection_id.trim()
+        : connectionId,
+    resource_id:
+      typeof payload.resource_id === 'string' && payload.resource_id.trim()
+        ? payload.resource_id.trim()
+        : resourceId,
+    spreadsheet_id:
+      typeof payload.spreadsheet_id === 'string' && payload.spreadsheet_id.trim()
+        ? payload.spreadsheet_id.trim()
+        : null,
+    spreadsheet_title:
+      typeof payload.spreadsheet_title === 'string' &&
+      payload.spreadsheet_title.trim()
+        ? payload.spreadsheet_title.trim()
+        : null,
+    selected_sheet_ids: selectedSheetIds,
+    selected_tabs: selectedTabs,
+    enabled:
+      typeof payload.enabled === 'boolean'
+        ? payload.enabled
+        : selectedSheetIds.length > 0,
+    tool_keys: Array.isArray(payload.tool_keys)
+      ? payload.tool_keys.filter((k: unknown): k is string => typeof k === 'string')
+      : undefined,
+  };
+}
+
+/**
+ * Persists the selected numeric `sheet_id` allowlist for a specific agent, connection,
+ * and spreadsheet via `google_workspace` (`action: "save_agent_sheet_tabs"`).
+ * Sending an empty array clears tab access and disables the four Sheets tools for that connection.
+ */
+export async function saveAgentSheetTabs(params: {
+  workspaceId?: string | null;
+  agentId: string;
+  connectionId: string;
+  resourceId: string;
+  selectedSheetIds: number[];
+}): Promise<AgentSheetTabsResult> {
+  const normalizedAgentId = params.agentId.trim();
+  const sanitizedSheetIds = extractNumericSheetIds(params.selectedSheetIds);
+
+  const { payload, workspaceId, connectionId, resourceId } =
+    await invokeGoogleSheetsTabAction({
+      action: 'save_agent_sheet_tabs',
+      workspaceId: params.workspaceId,
+      agentId: normalizedAgentId,
+      connectionId: params.connectionId,
+      resourceId: params.resourceId,
+      selectedSheetIds: sanitizedSheetIds,
+    });
+
+  const confirmedSheetIds = Array.isArray(payload.selected_sheet_ids)
+    ? extractNumericSheetIds(payload.selected_sheet_ids)
+    : Array.isArray(payload.configuration?.selected_sheet_ids)
+    ? extractNumericSheetIds(payload.configuration.selected_sheet_ids)
+    : sanitizedSheetIds;
+
+  return {
+    success: true,
+    workspace_id:
+      typeof payload.workspace_id === 'string' && payload.workspace_id.trim()
+        ? payload.workspace_id.trim()
+        : workspaceId,
+    agent_id:
+      typeof payload.agent_id === 'string' && payload.agent_id.trim()
+        ? payload.agent_id.trim()
+        : normalizedAgentId,
+    connection_id:
+      typeof payload.connection_id === 'string' && payload.connection_id.trim()
+        ? payload.connection_id.trim()
+        : connectionId,
+    resource_id:
+      typeof payload.resource_id === 'string' && payload.resource_id.trim()
+        ? payload.resource_id.trim()
+        : resourceId,
+    spreadsheet_id:
+      typeof payload.spreadsheet_id === 'string' && payload.spreadsheet_id.trim()
+        ? payload.spreadsheet_id.trim()
+        : null,
+    spreadsheet_title:
+      typeof payload.spreadsheet_title === 'string' &&
+      payload.spreadsheet_title.trim()
+        ? payload.spreadsheet_title.trim()
+        : null,
+    selected_sheet_ids: confirmedSheetIds,
+    enabled:
+      typeof payload.enabled === 'boolean'
+        ? payload.enabled
+        : confirmedSheetIds.length > 0,
+    tool_keys: Array.isArray(payload.tool_keys)
+      ? payload.tool_keys.filter((k: unknown): k is string => typeof k === 'string')
+      : undefined,
   };
 }
 

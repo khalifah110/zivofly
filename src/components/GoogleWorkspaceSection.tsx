@@ -43,6 +43,7 @@ import {
   AuthorizedResourcesSection,
   RemoveGoogleResourceModal,
 } from './AuthorizedResourcesSection';
+import { GoogleSheetTabsSelector } from './GoogleSheetTabsSelector';
 
 interface GoogleWorkspaceSectionProps {
   value?: GoogleWorkspaceConfig;
@@ -163,6 +164,10 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
   );
   const [draggedAppKey, setDraggedAppKey] = useState<VisibleGoogleWorkspaceAppKey | null>(null);
   const [dragOverAppKey, setDragOverAppKey] = useState<VisibleGoogleWorkspaceAppKey | null>(null);
+  const [sheetsTabRefreshTrigger, setSheetsTabRefreshTrigger] = useState<number>(0);
+  const [sheetsTabRefreshByResource, setSheetsTabRefreshByResource] = useState<
+    Record<string, number>
+  >({});
 
   const valueRef = useRef<GoogleWorkspaceConfig | undefined>(value);
   valueRef.current = value;
@@ -987,22 +992,59 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                                 )
                             : undefined
                         }
-                        onSelectResources={() =>
-                          void serviceHook.selectResources()
-                        }
+                        onSelectResources={() => {
+                          void serviceHook.selectResources().then((picked) => {
+                            if (
+                              resourceServiceKey === 'google_sheets_service' &&
+                              Array.isArray(picked) &&
+                              picked.length > 0
+                            ) {
+                              setSheetsTabRefreshByResource((prev) => {
+                                const next = { ...prev };
+                                for (const res of picked) {
+                                  next[res.id] = (next[res.id] || 0) + 1;
+                                }
+                                return next;
+                              });
+                            }
+                          });
+                        }}
                         onRequestRemoveResource={(res) =>
                           setResourceToRemove({
                             service: resourceServiceKey,
                             resource: res,
                           })
                         }
-                        onRefreshResources={() =>
-                          void serviceHook.refreshResources()
-                        }
+                        onRefreshResources={() => {
+                          void serviceHook.refreshResources();
+                          if (resourceServiceKey === 'google_sheets_service') {
+                            setSheetsTabRefreshTrigger((prev) => prev + 1);
+                          }
+                        }}
                         onConnectService={() =>
                           void handleConnect(app.key, app.name)
                         }
                         onClearError={serviceHook.clearResourcesError}
+                        renderResourceExtra={
+                          resourceServiceKey === 'google_sheets_service'
+                            ? (resource) => (
+                                <GoogleSheetTabsSelector
+                                  workspaceId={sheetsState.workspaceId}
+                                  agentId={agentId}
+                                  connectionId={sheetsState.connectionId}
+                                  resource={resource}
+                                  refreshTrigger={
+                                    sheetsTabRefreshTrigger +
+                                    (sheetsTabRefreshByResource[resource.id] || 0)
+                                  }
+                                  isBusyConnectingOrDisconnecting={isBusy}
+                                  onReconnectSheets={() =>
+                                    void handleConnect('sheets', 'Google Sheets')
+                                  }
+                                />
+                              )
+                            : undefined
+                        }
                       />
                     )}
                   </div>

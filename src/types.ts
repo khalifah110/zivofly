@@ -232,6 +232,57 @@ export interface GooglePickerTokenPayload {
   connectionId?: string | null;
 }
 
+export type GoogleSheetsToolKey =
+  | 'sheets.read'
+  | 'sheets.lookup'
+  | 'sheets.append_row'
+  | 'sheets.update_row';
+
+export interface GoogleSpreadsheetTab {
+  sheet_id: number;
+  title: string;
+  index: number;
+  hidden: boolean;
+}
+
+export interface ListSpreadsheetTabsResult {
+  success: true;
+  spreadsheet_id: string;
+  spreadsheet_title: string;
+  resource_id: string;
+  tabs: GoogleSpreadsheetTab[];
+}
+
+export interface AgentSheetTabsResult {
+  success: true;
+  workspace_id: string;
+  agent_id: string;
+  connection_id: string;
+  resource_id: string;
+  spreadsheet_id: string | null;
+  spreadsheet_title: string | null;
+  selected_sheet_ids: number[];
+  selected_tabs?: GoogleSpreadsheetTab[];
+  enabled?: boolean;
+  tool_keys?: string[];
+}
+
+export type GoogleSheetTabErrorCategory =
+  | 'expired_google_auth'
+  | 'inaccessible_spreadsheet'
+  | 'deleted_tab'
+  | 'session_expired'
+  | 'save_failure'
+  | 'load_failure';
+
+export interface ClassifiedGoogleSheetTabError {
+  category: GoogleSheetTabErrorCategory;
+  title: string;
+  message: string;
+  reconnectRequired: boolean;
+  shouldRefreshTabs: boolean;
+}
+
 export interface GoogleWorkspaceConfig {
   drive?: GoogleWorkspaceAppConfig;
   docs?: GoogleWorkspaceAppConfig;
