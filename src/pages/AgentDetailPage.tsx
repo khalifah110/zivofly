@@ -3003,34 +3003,20 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                             <span className="text-sm font-bold text-foreground truncate block">
                               {doc.name}
                             </span>
-                            <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border shrink-0">
-                              {doc.fileSize ||
-                                `${Math.max(1, Math.round(doc.content.length / 1024))} KB`}
-                            </span>
-                            {doc.sourceType && (
-                              <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground border border-border shrink-0">
-                                {isGoogleDoc ? 'Google Doc' : doc.sourceType}
+                            {!isDocReady && (
+                              <span
+                                className={`inline-flex items-center gap-1 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+                                  isDocFailed
+                                    ? 'bg-destructive/10 text-destructive border-destructive/20'
+                                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                                }`}
+                              >
+                                {isDocProcessing && (
+                                  <Loader2 className="size-2.5 animate-spin" />
+                                )}
+                                <span>{statusLabel}</span>
                               </span>
                             )}
-                            {isDocReady && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 shrink-0">
-                                {doc.chunkCount} {doc.chunkCount === 1 ? 'chunk' : 'chunks'}
-                              </span>
-                            )}
-                            <span
-                              className={`inline-flex items-center gap-1 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border shrink-0 ${
-                                isDocReady
-                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                                  : isDocFailed
-                                  ? 'bg-destructive/10 text-destructive border-destructive/20'
-                                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                              }`}
-                            >
-                              {isDocProcessing && (
-                                <Loader2 className="size-2.5 animate-spin" />
-                              )}
-                              <span>{statusLabel}</span>
-                            </span>
                           </div>
                           {formattedSourceModified && (
                             <p className="text-[11px] text-muted-foreground">
@@ -3072,7 +3058,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {(isGoogleDoc || !isDocReady || isDocFailed) && (
+                        {(!isDocReady || isDocFailed) && (
                           <button
                             type="button"
                             onClick={() =>
@@ -3084,7 +3070,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 cursor-pointer"
                             title={
                               isGoogleDoc
-                                ? 'Re-fetch Google Doc and update Knowledge Base chunks'
+                                ? 'Retry syncing Google Doc'
                                 : 'Process chunks and generate embeddings'
                             }
                           >
@@ -3093,13 +3079,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                                 isDocProcessing ? 'animate-spin' : ''
                               }`}
                             />
-                            <span>
-                              {isDocFailed
-                                ? 'Retry'
-                                : isGoogleDoc
-                                ? 'Sync'
-                                : 'Process'}
-                            </span>
+                            <span>{isDocFailed ? 'Retry' : 'Process'}</span>
                           </button>
                         )}
                         <button

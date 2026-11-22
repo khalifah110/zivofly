@@ -121,6 +121,7 @@ interface AuthorizedResourcesSectionProps {
   onRefreshResources: () => void;
   onConnectService: () => void;
   onClearError: () => void;
+  renderResourceStatusBadge?: (resource: GoogleAuthorizedResource) => React.ReactNode;
   renderResourceExtra?: (resource: GoogleAuthorizedResource) => React.ReactNode;
 }
 
@@ -322,6 +323,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
   onRefreshResources,
   onConnectService,
   onClearError,
+  renderResourceStatusBadge,
   renderResourceExtra,
 }) => {
   const copy = SERVICE_UI_COPY[service];
@@ -372,7 +374,11 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               type="button"
               onClick={onRefreshResources}
               disabled={isLoadingResources || isPickerActionBusy}
-              title={`Refresh authorized ${copy.serviceLabel} resources`}
+              title={
+                service === 'google_docs'
+                  ? 'Sync selected Google Docs'
+                  : `Refresh authorized ${copy.serviceLabel} resources`
+              }
               className="inline-flex items-center justify-center rounded-xl border border-border bg-background p-2 text-muted-foreground hover:text-foreground hover:bg-accent/70 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw
@@ -586,12 +592,14 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                               <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
                                 {resource.resource_type}
                               </span>
-                              {resource.status === 'active' && (
+                              {renderResourceStatusBadge ? (
+                                renderResourceStatusBadge(resource)
+                              ) : resource.status === 'active' ? (
                                 <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                                   <CheckCircle2 className="size-2.5" />
                                   <span>Authorized</span>
                                 </span>
-                              )}
+                              ) : null}
                               {pendingSyncBadgeLabel && (
                                 <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
                                   <Clock className="size-2.5" />

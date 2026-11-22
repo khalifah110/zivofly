@@ -62,19 +62,6 @@ interface RuntimeSyncEntry {
   reconnectRequired: boolean;
 }
 
-function formatDateTimeLabel(dateIso?: string | null): string | null {
-  if (!dateIso) return null;
-  const parsed = new Date(dateIso);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function matchesGoogleResource(
   doc: KnowledgeDocument,
   resource: GoogleAuthorizedResource
@@ -781,6 +768,66 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     handleSyncResourceForCurrentAgent,
   ]);
 
+  const renderResourceStatusBadge = useCallback(
+    (resource: GoogleAuthorizedResource) => {
+      if (!hasSavedCurrentAgent) return null;
+
+      const dbDoc =
+        agentGoogleDocs.find((doc) => matchesGoogleResource(doc, resource)) ||
+        null;
+      const runtime = runtimeSyncByResource[resource.id] || null;
+      const isSyncingThis = Boolean(syncingResourceIds[resource.id]);
+
+      const effectiveStatus: KnowledgeDocumentStatus | null = isSyncingThis
+        ? 'processing'
+        : runtime?.error && runtime.status === 'failed'
+        ? 'failed'
+        : dbDoc?.status || runtime?.status || null;
+
+      if (!effectiveStatus) return null;
+
+      if (isSyncingThis || effectiveStatus === 'processing') {
+        return (
+          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+            <Loader2 className="size-2.5 animate-spin" />
+            <span>Processing</span>
+          </span>
+        );
+      }
+
+      if (effectiveStatus === 'ready') {
+        return (
+          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-2.5" />
+            <span>Connected</span>
+          </span>
+        );
+      }
+
+      if (effectiveStatus === 'failed') {
+        return (
+          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+            <AlertCircle className="size-2.5" />
+            <span>Failed</span>
+          </span>
+        );
+      }
+
+      return (
+        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+          <Clock className="size-2.5" />
+          <span>Queued</span>
+        </span>
+      );
+    },
+    [
+      hasSavedCurrentAgent,
+      agentGoogleDocs,
+      runtimeSyncByResource,
+      syncingResourceIds,
+    ]
+  );
+
   const renderResourceSyncExtra = useCallback(
     (resource: GoogleAuthorizedResource) => {
       const dbDoc =
@@ -800,22 +847,12 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       }
 
       if (!dbDoc && !runtime && !isSyncingThis) {
+        if (!isLoadingSyncedDocs) return null;
         return (
           <div className="pl-0 sm:pl-10 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/60">
             <span className="text-[11px] text-muted-foreground">
-              {isLoadingSyncedDocs
-                ? 'Checking Knowledge Base sync status…'
-                : `Not synced to ${agentName ? `"${agentName}"` : 'this agent'} yet.`}
+              Checking Knowledge Base sync status…
             </span>
-            <button
-              type="button"
-              disabled={isConnecting || isDisconnecting || !connectionId}
-              onClick={() => void handleSyncResourceForCurrentAgent(resource)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className="size-3" />
-              <span>Sync</span>
-            </button>
           </div>
         );
       }
@@ -826,15 +863,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         ? 'failed'
         : dbDoc?.status || runtime?.status || 'queued';
 
-      const isReady = effectiveStatus === 'ready' && !isSyncingThis;
       const isFailed = effectiveStatus === 'failed' && !isSyncingThis;
-      const isProcessing = isSyncingThis || effectiveStatus === 'processing';
-
-      const effectiveSourceModified =
-        dbDoc?.sourceModifiedTime || runtime?.sourceModifiedTime || null;
-      const formattedSourceModified = formatDateTimeLabel(
-        effectiveSourceModified
-      );
 
       const rawErrorMessage =
         runtime?.error || (isFailed ? dbDoc?.errorMessage || null : null);
@@ -846,144 +875,85 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
           })
         : null;
 
-      const statusBadgeClass = isReady
-        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-        : isFailed
-        ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
-        : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25';
-
-      const statusLabel = isProcessing
-        ? 'Processing'
-        : isReady
-        ? 'Connected'
-        : isFailed
-        ? 'Failed'
-        : 'Queued';
+      if (!classifiedError) {
+        return null;
+      }
 
       return (
-        <div className="pl-0 sm:pl-10 space-y-2 pt-2 border-t border-border/60">
-          <div className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 space-y-2">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-                <span
-                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${statusBadgeClass}`}
-                >
-                  {isProcessing ? (
-                    <Loader2 className="size-2.5 animate-spin" />
-                  ) : isReady ? (
-                    <CheckCircle2 className="size-2.5" />
-                  ) : isFailed ? (
-                    <AlertCircle className="size-2.5" />
-                  ) : (
-                    <Clock className="size-2.5" />
+        <div className="pl-0 sm:pl-10 pt-2 border-t border-border/60">
+          <div
+            className={`rounded-lg border px-2.5 py-2 flex flex-col sm:flex-row sm:items-start justify-between gap-2 ${
+              classifiedError.category === 'google_auth'
+                ? 'border-amber-500/30 bg-amber-500/10'
+                : 'border-red-500/25 bg-red-500/10'
+            }`}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              {classifiedError.category === 'openai_embedding_auth' ? (
+                <KeyRound className="size-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle
+                  className={`size-3.5 shrink-0 mt-0.5 ${
+                    classifiedError.category === 'google_auth'
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-red-600 dark:text-red-400'
+                  }`}
+                />
+              )}
+              <div className="space-y-1 min-w-0 text-[11px] leading-snug break-words">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span
+                    className={`font-semibold ${
+                      classifiedError.category === 'google_auth'
+                        ? 'text-amber-800 dark:text-amber-200'
+                        : 'text-red-700 dark:text-red-300'
+                    }`}
+                  >
+                    {classifiedError.title}
+                  </span>
+                  {classifiedError.stage && (
+                    <span
+                      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                        classifiedError.category === 'google_auth'
+                          ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                          : 'bg-red-500/15 text-red-700 dark:text-red-300'
+                      }`}
+                    >
+                      stage: {classifiedError.stage}
+                    </span>
                   )}
-                  <span>{statusLabel}</span>
-                </span>
-
-                {formattedSourceModified && (
-                  <span className="text-[10px] text-muted-foreground">
-                    Source modified {formattedSourceModified}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-                <button
-                  type="button"
-                  disabled={isSyncingThis || isConnecting || isDisconnecting}
-                  onClick={() => void handleSyncResourceForCurrentAgent(resource)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border bg-background hover:bg-accent px-2.5 py-1 text-[11px] font-semibold text-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                </div>
+                <p
+                  className={
+                    classifiedError.category === 'google_auth'
+                      ? 'text-amber-800/90 dark:text-amber-200/90'
+                      : 'text-red-700/90 dark:text-red-300/90'
+                  }
                 >
-                  <RefreshCw
-                    className={`size-3 ${isSyncingThis ? 'animate-spin' : ''}`}
-                  />
-                  <span>
-                    {isSyncingThis
-                      ? 'Syncing…'
-                      : isFailed
-                      ? 'Retry'
-                      : 'Sync'}
-                  </span>
-                </button>
+                  {classifiedError.summary}
+                </p>
+                <p
+                  className={`text-[10px] font-mono opacity-85 ${
+                    classifiedError.category === 'google_auth'
+                      ? 'text-amber-900 dark:text-amber-100'
+                      : 'text-red-800 dark:text-red-200'
+                  }`}
+                >
+                  {classifiedError.detail}
+                </p>
               </div>
             </div>
 
-            {classifiedError && (
-              <div
-                className={`rounded-lg border px-2.5 py-2 flex flex-col sm:flex-row sm:items-start justify-between gap-2 ${
-                  classifiedError.category === 'google_auth'
-                    ? 'border-amber-500/30 bg-amber-500/10'
-                    : 'border-red-500/25 bg-red-500/10'
-                }`}
+            {classifiedError.category === 'google_auth' && (
+              <button
+                type="button"
+                disabled={isConnecting || isDisconnecting}
+                onClick={() => void handleConnectDocs()}
+                className="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-[11px] font-semibold shrink-0 transition-colors cursor-pointer disabled:opacity-50"
               >
-                <div className="flex items-start gap-2 min-w-0">
-                  {classifiedError.category === 'openai_embedding_auth' ? (
-                    <KeyRound className="size-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertCircle
-                      className={`size-3.5 shrink-0 mt-0.5 ${
-                        classifiedError.category === 'google_auth'
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : 'text-red-600 dark:text-red-400'
-                      }`}
-                    />
-                  )}
-                  <div className="space-y-1 min-w-0 text-[11px] leading-snug break-words">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span
-                        className={`font-semibold ${
-                          classifiedError.category === 'google_auth'
-                            ? 'text-amber-800 dark:text-amber-200'
-                            : 'text-red-700 dark:text-red-300'
-                        }`}
-                      >
-                        {classifiedError.title}
-                      </span>
-                      {classifiedError.stage && (
-                        <span
-                          className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                            classifiedError.category === 'google_auth'
-                              ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
-                              : 'bg-red-500/15 text-red-700 dark:text-red-300'
-                          }`}
-                        >
-                          stage: {classifiedError.stage}
-                        </span>
-                      )}
-                    </div>
-                    <p
-                      className={
-                        classifiedError.category === 'google_auth'
-                          ? 'text-amber-800/90 dark:text-amber-200/90'
-                          : 'text-red-700/90 dark:text-red-300/90'
-                      }
-                    >
-                      {classifiedError.summary}
-                    </p>
-                    <p
-                      className={`text-[10px] font-mono opacity-85 ${
-                        classifiedError.category === 'google_auth'
-                          ? 'text-amber-900 dark:text-amber-100'
-                          : 'text-red-800 dark:text-red-200'
-                      }`}
-                    >
-                      {classifiedError.detail}
-                    </p>
-                  </div>
-                </div>
-
-                {classifiedError.category === 'google_auth' && (
-                  <button
-                    type="button"
-                    disabled={isConnecting || isDisconnecting}
-                    onClick={() => void handleConnectDocs()}
-                    className="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-[11px] font-semibold shrink-0 transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className="size-3" />
-                    <span>Reconnect Google Docs</span>
-                  </button>
-                )}
-              </div>
+                <RefreshCw className="size-3" />
+                <span>Reconnect Google Docs</span>
+              </button>
             )}
           </div>
         </div>
@@ -995,11 +965,9 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       syncingResourceIds,
       hasSavedCurrentAgent,
       isLoadingSyncedDocs,
-      agentName,
       isConnecting,
       isDisconnecting,
-      connectionId,
-      handleSyncResourceForCurrentAgent,
+      handleConnectDocs,
     ]
   );
 
@@ -1041,6 +1009,26 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     agentGoogleDocs,
     runtimeSyncByResource,
     sessionPickedResourceIds,
+  ]);
+
+  const isAnyDocSyncing = Object.values(syncingResourceIds).some(Boolean);
+
+  const handleRefreshAndSyncVisibleDocs = useCallback(async () => {
+    await docsResources.refreshResources();
+    if (hasSavedCurrentAgent && connectionId && visibleAgentResources.length > 0) {
+      for (const resource of visibleAgentResources) {
+        await handleSyncResourceForCurrentAgent(resource);
+      }
+    } else {
+      await refreshSyncedGoogleDocs();
+    }
+  }, [
+    docsResources,
+    hasSavedCurrentAgent,
+    connectionId,
+    visibleAgentResources,
+    handleSyncResourceForCurrentAgent,
+    refreshSyncedGoogleDocs,
   ]);
 
   const isBusy = isConnecting || isDisconnecting;
@@ -1248,7 +1236,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             activeCount={visibleAgentResources.length}
             needsScopeReauth={docsResources.needsScopeReauth}
             scopeReauthMessage={docsResources.scopeReauthMessage}
-            isLoadingResources={docsResources.isLoadingResources}
+            isLoadingResources={docsResources.isLoadingResources || isAnyDocSyncing}
             isFetchingPickerToken={docsResources.isFetchingPickerToken}
             isPickerOpen={docsResources.isPickerOpen}
             isSavingSelection={docsResources.isSavingSelection}
@@ -1257,12 +1245,10 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             isBusyConnectingOrDisconnecting={isBusy}
             onSelectResources={() => void handleSelectDocs()}
             onRequestRemoveResource={(res) => setResourceToRemove(res)}
-            onRefreshResources={() => {
-              void docsResources.refreshResources();
-              void refreshSyncedGoogleDocs();
-            }}
+            onRefreshResources={() => void handleRefreshAndSyncVisibleDocs()}
             onConnectService={() => void handleConnectDocs()}
             onClearError={docsResources.clearResourcesError}
+            renderResourceStatusBadge={renderResourceStatusBadge}
             renderResourceExtra={renderResourceSyncExtra}
           />
         </div>
