@@ -5455,25 +5455,168 @@ function normalizeKnowledgeDocStatus(raw: unknown): KnowledgeDocumentStatus | nu
   return VALID_KNOWLEDGE_DOC_STATUSES.has(normalized) ? normalized : null;
 }
 
+export type KnowledgeErrorCategory =
+  | 'google_auth'
+  | 'document_extraction'
+  | 'openai_embedding_auth'
+  | 'processing_error';
+
+export interface ClassifiedKnowledgeError {
+  category: KnowledgeErrorCategory;
+  title: string;
+  summary: string;
+  detail: string;
+  stage: string | null;
+  reconnectRequired: boolean;
+}
+
 /**
- * Fetches persisted Google Doc knowledge_documents records for the active workspace
- * so Knowledge Base sync statuses, chunk counts, and source modification times stay
- * synchronized with Supabase across page reloads.
+ * Classifies Knowledge Base errors into four distinct categories so users receive
+ * actionable guidance without confusing backend credential issues, Google OAuth issues,
+ * and document text extraction issues:
+ * - `openai_embedding_auth`: OpenAI HTTP 401 / server-side Supabase secret `gpt_api`
+ * - `google_auth`: Google Docs OAuth / scope / token reconnect required
+ * - `document_extraction`: text extraction / download / parsing failures
+ * - `processing_error`: all other backend chunking/indexing failures
+ */
+export function classifyKnowledgeProcessingError(params: {
+  message?: string | null;
+  stage?: string | null;
+  reconnectRequired?: boolean;
+}): ClassifiedKnowledgeError {
+  const rawMessage =
+    (typeof params.message === 'string' && params.message.trim()) ||
+    'Knowledge Base document processing failed.';
+  const lowerMsg = rawMessage.toLowerCase();
+
+  const inlineStageMatch = rawMessage.match(/\[(?:stage:\s*)?([a-z0-9_.-]+)\]/i);
+  const stage =
+    (typeof params.stage === 'string' && params.stage.trim()) ||
+    (inlineStageMatch ? inlineStageMatch[1] : null);
+  const lowerStage = (stage || '').toLowerCase();
+
+  // 1. OpenAI embedding HTTP 401 / backend secret `gpt_api` failure (never a Google auth error)
+  const isOpenAiEmbedding401 =
+    (lowerMsg.includes('openai') &&
+      (lowerMsg.includes('401') ||
+        lowerMsg.includes('unauthorized') ||
+        lowerMsg.includes('invalid_api_key') ||
+        lowerMsg.includes('invalid api key') ||
+        lowerMsg.includes('incorrect api key') ||
+        lowerMsg.includes('authentication'))) ||
+    (lowerMsg.includes('embedding') && lowerMsg.includes('401')) ||
+    lowerMsg.includes('gpt_api');
+
+  if (isOpenAiEmbedding401) {
+    return {
+      category: 'openai_embedding_auth',
+      title: 'OpenAI embedding authentication failed (HTTP 401)',
+      summary:
+        'Backend embedding generation was rejected by OpenAI (HTTP 401). Update the server-side Supabase Edge Function secret "gpt_api", then retry processing.',
+      detail: rawMessage,
+      stage,
+      reconnectRequired: false,
+    };
+  }
+
+  // 2. Google Docs authorization / OAuth reconnect failure
+  const isGoogleAuthFailure =
+    Boolean(params.reconnectRequired) ||
+    isGoogleScopeReauthError(rawMessage) ||
+    lowerStage.includes('google_auth') ||
+    lowerStage.includes('google_oauth') ||
+    lowerStage.includes('oauth') ||
+    lowerStage.includes('token') ||
+    ((lowerMsg.includes('google') || lowerMsg.includes('oauth')) &&
+      (lowerMsg.includes('reconnect') ||
+        lowerMsg.includes('expired') ||
+        lowerMsg.includes('revoked') ||
+        lowerMsg.includes('invalid_grant') ||
+        lowerMsg.includes('insufficient') ||
+        lowerMsg.includes('unauthorized') ||
+        lowerMsg.includes('401') ||
+        lowerMsg.includes('403') ||
+        lowerMsg.includes('permission')));
+
+  if (isGoogleAuthFailure) {
+    return {
+      category: 'google_auth',
+      title: 'Google Docs authorization required',
+      summary:
+        'Your Google Docs connection has expired or is missing required read-only permissions. Reconnect Google Docs and retry.',
+      detail: rawMessage,
+      stage,
+      reconnectRequired: true,
+    };
+  }
+
+  // 3. Document extraction / download / parsing failure
+  const isExtractionFailure =
+    lowerStage.includes('extract') ||
+    lowerStage.includes('download') ||
+    lowerStage.includes('fetch_doc') ||
+    lowerStage.includes('google_doc') ||
+    lowerStage.includes('parse') ||
+    lowerStage.includes('corrupted_docx') ||
+    lowerStage.includes('empty_content') ||
+    lowerMsg.includes('extract') ||
+    lowerMsg.includes('corrupted docx') ||
+    lowerMsg.includes('empty_content') ||
+    lowerMsg.includes('content_text is empty') ||
+    lowerMsg.includes('no readable text') ||
+    lowerMsg.includes('could not read') ||
+    lowerMsg.includes('failed to fetch google doc') ||
+    lowerMsg.includes('failed to export google doc') ||
+    lowerMsg.includes('unable to parse');
+
+  if (isExtractionFailure) {
+    return {
+      category: 'document_extraction',
+      title: 'Document extraction failed',
+      summary:
+        'Readable text could not be extracted from this document before indexing. Verify the source document contains readable text and retry.',
+      detail: rawMessage,
+      stage,
+      reconnectRequired: false,
+    };
+  }
+
+  // 4. Other backend processing failures
+  return {
+    category: 'processing_error',
+    title: 'Document processing failed',
+    summary:
+      'The backend could not finish chunking and indexing this document. Review the error details below and retry.',
+    detail: rawMessage,
+    stage,
+    reconnectRequired: false,
+  };
+}
+
+/**
+ * Fetches persisted Google Doc knowledge_documents records for the active workspace,
+ * scoped to `agentId` when provided so each agent's configuration displays only its own records.
  */
 export async function getWorkspaceGoogleDocKnowledgeRecords(
-  workspaceId: string
+  workspaceId: string,
+  agentId?: string | null
 ): Promise<KnowledgeDocument[]> {
   if (!supabase || !isValidUuid(workspaceId)) {
     return [];
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('knowledge_documents')
     .select('*')
     .eq('workspace_id', workspaceId)
     .eq('source_type', 'google_doc')
-    .neq('status', 'deleted')
-    .order('updated_at', { ascending: false });
+    .neq('status', 'deleted');
+
+  if (agentId && isValidUuid(agentId)) {
+    query = query.eq('agent_id', agentId);
+  }
+
+  const { data, error } = await query.order('updated_at', { ascending: false });
 
   if (error || !Array.isArray(data)) {
     return [];
@@ -5485,7 +5628,7 @@ export async function getWorkspaceGoogleDocKnowledgeRecords(
 /**
  * Invokes the deployed `google_workspace` Edge Function with `action: "sync_google_doc"`
  * to download the selected native Google Doc server-side, extract text, upsert its
- * `knowledge_documents` record for the chosen agent, and run `zivofy_ai` `process_document`.
+ * `knowledge_documents` record for the current agent, and run `zivofy_ai` `process_document`.
  *
  * Strictly requires `success === true` AND `document.status === 'ready'` to report `isReady: true`.
  * Preserves backend error details (`error`, `stage`, `document_id`, `status`, `reconnect_required`).
@@ -5506,25 +5649,37 @@ export async function syncGoogleDocToKnowledgeBase(params: {
   const baseFailure = (
     errorMessage: string,
     overrides?: Partial<GoogleDocSyncOutcome>
-  ): GoogleDocSyncOutcome => ({
-    success: false,
-    isReady: false,
-    action: 'sync_google_doc',
-    workspaceId: overrides?.workspaceId || params.workspaceId || '',
-    connectionId: normalizedConnectionId,
-    resourceId: normalizedResourceId,
-    agentId: normalizedAgentId,
-    document: overrides?.document ?? null,
-    documentId: overrides?.documentId ?? overrides?.document?.id ?? null,
-    status: overrides?.status ?? overrides?.document?.status ?? null,
-    sourceModifiedTime: overrides?.sourceModifiedTime ?? null,
-    chunksCreated: overrides?.chunksCreated ?? null,
-    error: errorMessage,
-    stage: overrides?.stage ?? null,
-    reconnectRequired: Boolean(
-      overrides?.reconnectRequired || isGoogleScopeReauthError(errorMessage)
-    ),
-  });
+  ): GoogleDocSyncOutcome => {
+    const classified = classifyKnowledgeProcessingError({
+      message: errorMessage,
+      stage: overrides?.stage ?? null,
+      reconnectRequired: Boolean(overrides?.reconnectRequired),
+    });
+
+    return {
+      success: false,
+      isReady: false,
+      action: 'sync_google_doc',
+      workspaceId: overrides?.workspaceId || params.workspaceId || '',
+      connectionId: normalizedConnectionId,
+      resourceId: normalizedResourceId,
+      agentId: normalizedAgentId,
+      document: overrides?.document ?? null,
+      documentId: overrides?.documentId ?? overrides?.document?.id ?? null,
+      status: overrides?.status ?? overrides?.document?.status ?? null,
+      sourceModifiedTime: overrides?.sourceModifiedTime ?? null,
+      chunksCreated: overrides?.chunksCreated ?? null,
+      error: errorMessage,
+      stage: overrides?.stage ?? classified.stage ?? null,
+      reconnectRequired:
+        classified.category === 'openai_embedding_auth'
+          ? false
+          : Boolean(
+              overrides?.reconnectRequired ||
+                isGoogleScopeReauthError(errorMessage)
+            ),
+    };
+  };
 
   if (!supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return baseFailure(

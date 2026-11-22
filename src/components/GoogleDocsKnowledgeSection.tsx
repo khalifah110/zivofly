@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   AlertCircle,
-  Bot,
   CheckCircle2,
   Clock,
+  KeyRound,
   Loader2,
   RefreshCw,
   Unplug,
@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  Agent,
   GoogleAuthorizedResource,
   GoogleWorkspaceConfig,
   GoogleWorkspaceIntegrationStatus,
@@ -21,6 +20,7 @@ import {
 } from '../types';
 import { GoogleDocsLogo } from './BrandLogos';
 import {
+  classifyKnowledgeProcessingError,
   createEmptyGoogleConnectionsMap,
   disconnectGoogleWorkspaceIntegration,
   getGoogleWorkspaceIntegrationConnections,
@@ -43,7 +43,8 @@ interface GoogleDocsKnowledgeSectionProps {
   onChange?: (config: GoogleWorkspaceConfig) => void;
   workspaceId?: string | null;
   agentId?: string | null;
-  agents?: Agent[];
+  agentName?: string | null;
+  docsRefreshKey?: number;
   onKnowledgeDocSynced?: (doc: KnowledgeDocument, targetAgentId: string) => void;
 }
 
@@ -127,7 +128,8 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   onChange,
   workspaceId,
   agentId,
-  agents = [],
+  agentName,
+  docsRefreshKey = 0,
   onKnowledgeDocSynced,
 }) => {
   const [resolvedWorkspaceId, setResolvedWorkspaceId] = useState<string | null>(
@@ -146,24 +148,18 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     message: string;
   } | null>(null);
 
-  // Real backend knowledge_documents state for Google Docs in this workspace
-  const [workspaceGoogleDocs, setWorkspaceGoogleDocs] = useState<
-    KnowledgeDocument[]
-  >([]);
+  // Real backend knowledge_documents state strictly scoped to the currently open agent
+  const [agentGoogleDocs, setAgentGoogleDocs] = useState<KnowledgeDocument[]>([]);
   const [isLoadingSyncedDocs, setIsLoadingSyncedDocs] = useState<boolean>(false);
-  const [syncingKeys, setSyncingKeys] = useState<Record<string, boolean>>({});
-  const [runtimeSyncByKey, setRuntimeSyncByKey] = useState<
+  const [syncingResourceIds, setSyncingResourceIds] = useState<
+    Record<string, boolean>
+  >({});
+  const [runtimeSyncByResource, setRuntimeSyncByResource] = useState<
     Record<string, RuntimeSyncEntry>
   >({});
   const [reconnectRequiredBanner, setReconnectRequiredBanner] = useState<
     string | null
   >(null);
-
-  // Target agent selection modal state (triggered after Google Picker selection or "Sync to Agent")
-  const [pendingSyncResources, setPendingSyncResources] = useState<
-    GoogleAuthorizedResource[]
-  >([]);
-  const [chosenTargetAgentId, setChosenTargetAgentId] = useState<string>('');
 
   const valueRef = useRef<GoogleWorkspaceConfig | undefined>(value);
   valueRef.current = value;
@@ -174,22 +170,18 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   );
   onKnowledgeDocSyncedRef.current = onKnowledgeDocSynced;
 
-  const savedAgents = useMemo(
-    () => agents.filter((a) => isValidUuid(a.id)),
-    [agents]
-  );
-
-  const agentNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const a of savedAgents) {
-      map.set(a.id, a.name || 'Unnamed Agent');
-    }
-    return map;
-  }, [savedAgents]);
+  const hasSavedCurrentAgent = Boolean(agentId && isValidUuid(agentId));
 
   useEffect(() => {
     setResolvedWorkspaceId(workspaceId || null);
   }, [workspaceId]);
+
+  // Reset per-agent runtime sync cache when switching to a different agent
+  useEffect(() => {
+    setRuntimeSyncByResource({});
+    setSyncingResourceIds({});
+    setReconnectRequiredBanner(null);
+  }, [agentId]);
 
   const applyConnectionsToParent = useCallback(
     (
@@ -225,15 +217,15 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   const refreshSyncedGoogleDocs = useCallback(
     async (wsId?: string | null): Promise<KnowledgeDocument[]> => {
       const targetWsId = wsId || effectiveWorkspaceId;
-      if (!targetWsId || !isValidUuid(targetWsId)) {
-        setWorkspaceGoogleDocs([]);
+      if (!targetWsId || !isValidUuid(targetWsId) || !agentId || !isValidUuid(agentId)) {
+        setAgentGoogleDocs([]);
         return [];
       }
 
       setIsLoadingSyncedDocs(true);
       try {
-        const rows = await getWorkspaceGoogleDocKnowledgeRecords(targetWsId);
-        setWorkspaceGoogleDocs(rows);
+        const rows = await getWorkspaceGoogleDocKnowledgeRecords(targetWsId, agentId);
+        setAgentGoogleDocs(rows);
         return rows;
       } catch {
         return [];
@@ -241,12 +233,12 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         setIsLoadingSyncedDocs(false);
       }
     },
-    [effectiveWorkspaceId]
+    [effectiveWorkspaceId, agentId]
   );
 
   useEffect(() => {
     void refreshSyncedGoogleDocs(effectiveWorkspaceId);
-  }, [effectiveWorkspaceId, refreshSyncedGoogleDocs]);
+  }, [effectiveWorkspaceId, agentId, docsRefreshKey, refreshSyncedGoogleDocs]);
 
   const handleDocsResourcesUpdated = useCallback(
     (activeResourceIds: string[]) => {
@@ -293,17 +285,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showDisconnectModal, isDisconnecting]);
-
-  useEffect(() => {
-    if (pendingSyncResources.length === 0) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setPendingSyncResources([]);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pendingSyncResources.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -504,50 +485,40 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     }
   }, [resourceToRemove, docsResources, refreshSyncedGoogleDocs]);
 
-  const openAgentChooserForResources = useCallback(
-    (resourcesToSync: GoogleAuthorizedResource[]) => {
-      if (resourcesToSync.length === 0) return;
-      const defaultTarget =
-        agentId && isValidUuid(agentId) && savedAgents.some((a) => a.id === agentId)
-          ? agentId
-          : savedAgents.length === 1
-          ? savedAgents[0].id
-          : '';
-      setChosenTargetAgentId(defaultTarget);
-      setPendingSyncResources(resourcesToSync);
-    },
-    [agentId, savedAgents]
-  );
-
-  const handleSyncResourceToAgent = useCallback(
-    async (resource: GoogleAuthorizedResource, targetAgentId: string) => {
+  /**
+   * Automatically syncs a selected Google Doc to the currently open agent's Knowledge Base.
+   * Never prompts the owner to pick another agent.
+   */
+  const handleSyncResourceForCurrentAgent = useCallback(
+    async (resource: GoogleAuthorizedResource) => {
       if (!connectionId || !effectiveWorkspaceId) {
-        const msg =
-          'Connect Google Docs and ensure an active workspace is loaded before syncing.';
-        toast.error(msg);
+        toast.error(
+          'Connect Google Docs and ensure an active workspace is loaded before syncing.'
+        );
         return;
       }
 
-      if (!isValidUuid(targetAgentId)) {
-        toast.error('Please select a saved target agent before syncing.');
+      if (!agentId || !isValidUuid(agentId)) {
+        toast.error(
+          'Please save and create this agent first before indexing Google Docs into its Knowledge Base.'
+        );
         return;
       }
 
-      const syncKey = `${resource.id}:${targetAgentId}`;
-      if (syncingKeys[syncKey]) return;
+      if (syncingResourceIds[resource.id]) return;
 
-      setSyncingKeys((prev) => ({ ...prev, [syncKey]: true }));
-      setRuntimeSyncByKey((prev) => ({
+      setSyncingResourceIds((prev) => ({ ...prev, [resource.id]: true }));
+      setRuntimeSyncByResource((prev) => ({
         ...prev,
-        [syncKey]: {
+        [resource.id]: {
           resourceId: resource.id,
-          agentId: targetAgentId,
+          agentId,
           status: 'processing',
-          chunkCount: prev[syncKey]?.chunkCount ?? null,
-          sourceModifiedTime: prev[syncKey]?.sourceModifiedTime ?? null,
+          chunkCount: prev[resource.id]?.chunkCount ?? null,
+          sourceModifiedTime: prev[resource.id]?.sourceModifiedTime ?? null,
           error: null,
           stage: null,
-          documentId: prev[syncKey]?.documentId ?? null,
+          documentId: prev[resource.id]?.documentId ?? null,
           reconnectRequired: false,
         },
       }));
@@ -557,14 +528,22 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
           workspaceId: effectiveWorkspaceId,
           connectionId,
           resourceId: resource.id,
-          agentId: targetAgentId,
+          agentId,
         });
 
-        setRuntimeSyncByKey((prev) => ({
+        const classifiedError = outcome.error
+          ? classifyKnowledgeProcessingError({
+              message: outcome.error,
+              stage: outcome.stage,
+              reconnectRequired: outcome.reconnectRequired,
+            })
+          : null;
+
+        setRuntimeSyncByResource((prev) => ({
           ...prev,
-          [syncKey]: {
+          [resource.id]: {
             resourceId: resource.id,
-            agentId: targetAgentId,
+            agentId,
             status: outcome.status,
             chunkCount:
               outcome.document?.chunkCount ?? outcome.chunksCreated ?? null,
@@ -573,17 +552,19 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
               outcome.document?.sourceModifiedTime ??
               null,
             error: outcome.error,
-            stage: outcome.stage,
+            stage: outcome.stage ?? classifiedError?.stage ?? null,
             documentId: outcome.documentId,
-            reconnectRequired: outcome.reconnectRequired,
+            reconnectRequired:
+              classifiedError?.category === 'google_auth' ||
+              Boolean(
+                outcome.reconnectRequired &&
+                  classifiedError?.category !== 'openai_embedding_auth'
+              ),
           },
         }));
 
-        if (outcome.reconnectRequired) {
-          setReconnectRequiredBanner(
-            outcome.error ||
-              'Your Google Docs authorization has expired or is missing required read-only permissions. Reconnect Google Docs to continue syncing.'
-          );
+        if (classifiedError?.category === 'google_auth') {
+          setReconnectRequiredBanner(classifiedError.detail);
         }
 
         const refreshedRows = await refreshSyncedGoogleDocs(
@@ -596,55 +577,55 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             : null) || outcome.document;
 
         if (persistedDoc && onKnowledgeDocSyncedRef.current) {
-          onKnowledgeDocSyncedRef.current(persistedDoc, targetAgentId);
+          onKnowledgeDocSyncedRef.current(persistedDoc, agentId);
         }
-
-        const targetAgentLabel =
-          agentNameById.get(targetAgentId) || 'selected agent';
 
         // Strict rule: ONLY display success when success === true AND document.status === 'ready'
         if (outcome.success && outcome.isReady && outcome.status === 'ready') {
           setReconnectRequiredBanner(null);
-          const count =
-            persistedDoc?.chunkCount ?? outcome.chunksCreated ?? 0;
+          const count = persistedDoc?.chunkCount ?? outcome.chunksCreated ?? 0;
           toast.success(
-            `Synced "${resource.name}" to ${targetAgentLabel} (${count} ${
+            `Synced "${resource.name}" (${count} ${
               count === 1 ? 'chunk' : 'chunks'
             }, Ready).`
           );
-        } else if (outcome.error) {
-          const stageSuffix = outcome.stage ? ` [stage: ${outcome.stage}]` : '';
-          toast.error(`${outcome.error}${stageSuffix}`, { duration: 8000 });
+        } else if (classifiedError) {
+          const stageSuffix = classifiedError.stage
+            ? ` [stage: ${classifiedError.stage}]`
+            : '';
+          toast.error(
+            `${classifiedError.title}: ${classifiedError.detail}${stageSuffix}`,
+            { duration: 9000 }
+          );
         } else {
           toast.info(
-            `"${resource.name}" for ${targetAgentLabel} is currently ${
-              outcome.status || 'queued'
-            }.`
+            `"${resource.name}" status: ${outcome.status || 'queued'}.`
           );
         }
       } catch (err: any) {
         const errMsg =
           err?.message ||
-          `Failed to sync "${resource.name}" to the Knowledge Base.`;
-        setRuntimeSyncByKey((prev) => ({
+          `Failed to sync "${resource.name}" to this agent's Knowledge Base.`;
+        const classified = classifyKnowledgeProcessingError({ message: errMsg });
+        setRuntimeSyncByResource((prev) => ({
           ...prev,
-          [syncKey]: {
+          [resource.id]: {
             resourceId: resource.id,
-            agentId: targetAgentId,
+            agentId,
             status: 'failed',
-            chunkCount: prev[syncKey]?.chunkCount ?? null,
-            sourceModifiedTime: prev[syncKey]?.sourceModifiedTime ?? null,
+            chunkCount: prev[resource.id]?.chunkCount ?? null,
+            sourceModifiedTime: prev[resource.id]?.sourceModifiedTime ?? null,
             error: errMsg,
-            stage: null,
-            documentId: prev[syncKey]?.documentId ?? null,
-            reconnectRequired: false,
+            stage: classified.stage,
+            documentId: prev[resource.id]?.documentId ?? null,
+            reconnectRequired: classified.category === 'google_auth',
           },
         }));
-        toast.error(errMsg, { duration: 8000 });
+        toast.error(`${classified.title}: ${errMsg}`, { duration: 9000 });
       } finally {
-        setSyncingKeys((prev) => {
+        setSyncingResourceIds((prev) => {
           const next = { ...prev };
-          delete next[syncKey];
+          delete next[resource.id];
           return next;
         });
       }
@@ -652,280 +633,269 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     [
       connectionId,
       effectiveWorkspaceId,
-      syncingKeys,
+      agentId,
+      syncingResourceIds,
       refreshSyncedGoogleDocs,
-      agentNameById,
     ]
   );
 
   const handleSelectDocs = useCallback(async () => {
     const pickedResources = await docsResources.selectResources();
-    if (pickedResources.length > 0) {
-      openAgentChooserForResources(pickedResources);
-    }
-  }, [docsResources, openAgentChooserForResources]);
+    if (pickedResources.length === 0) return;
 
-  const handleConfirmTargetAgentSync = async () => {
-    if (pendingSyncResources.length === 0) return;
-    if (!isValidUuid(chosenTargetAgentId)) {
-      toast.error('Please choose a target agent first.');
+    if (!agentId || !isValidUuid(agentId)) {
+      toast.info(
+        'Google Doc selected. Save this agent first to sync and index it into this agent’s Knowledge Base.'
+      );
       return;
     }
 
-    const resourcesBatch = [...pendingSyncResources];
-    const targetId = chosenTargetAgentId;
-    setPendingSyncResources([]);
-
-    for (const resource of resourcesBatch) {
-      await handleSyncResourceToAgent(resource, targetId);
+    for (const resource of pickedResources) {
+      await handleSyncResourceForCurrentAgent(resource);
     }
-  };
+  }, [docsResources, agentId, handleSyncResourceForCurrentAgent]);
 
   const renderResourceSyncExtra = useCallback(
     (resource: GoogleAuthorizedResource) => {
-      const dbMatches = workspaceGoogleDocs.filter((doc) =>
-        matchesGoogleResource(doc, resource)
-      );
+      const dbDoc =
+        agentGoogleDocs.find((doc) => matchesGoogleResource(doc, resource)) ||
+        null;
+      const runtime = runtimeSyncByResource[resource.id] || null;
+      const isSyncingThis = Boolean(syncingResourceIds[resource.id]);
 
-      // Combine real Supabase knowledge_documents rows with any runtime sync outcomes (e.g. failed before row creation)
-      const entriesByAgent = new Map<
-        string,
-        {
-          agentId: string;
-          doc: KnowledgeDocument | null;
-          runtime: RuntimeSyncEntry | null;
-        }
-      >();
-
-      for (const doc of dbMatches) {
-        const keyAgentId = doc.agentId || '';
-        if (!keyAgentId) continue;
-        const syncKey = `${resource.id}:${keyAgentId}`;
-        if (!entriesByAgent.has(keyAgentId)) {
-          entriesByAgent.set(keyAgentId, {
-            agentId: keyAgentId,
-            doc,
-            runtime: runtimeSyncByKey[syncKey] || null,
-          });
-        }
+      if (!hasSavedCurrentAgent) {
+        return (
+          <div className="pl-0 sm:pl-10 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/60">
+            <span className="text-[11px] text-muted-foreground">
+              Save this agent first to sync and index this Google Doc into its Knowledge Base.
+            </span>
+          </div>
+        );
       }
 
-      for (const runtimeEntry of Object.values(runtimeSyncByKey) as RuntimeSyncEntry[]) {
-        if (runtimeEntry.resourceId !== resource.id) continue;
-        if (!entriesByAgent.has(runtimeEntry.agentId)) {
-          entriesByAgent.set(runtimeEntry.agentId, {
-            agentId: runtimeEntry.agentId,
-            doc: null,
-            runtime: runtimeEntry,
-          });
-        }
-      }
-
-      const entries = Array.from(entriesByAgent.values());
-
-      if (entries.length === 0) {
+      if (!dbDoc && !runtime && !isSyncingThis) {
         return (
           <div className="pl-0 sm:pl-10 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/60">
             <span className="text-[11px] text-muted-foreground">
               {isLoadingSyncedDocs
                 ? 'Checking Knowledge Base sync status…'
-                : 'Not synced to an agent Knowledge Base yet.'}
+                : `Not synced to ${agentName ? `"${agentName}"` : 'this agent'} yet.`}
             </span>
             <button
               type="button"
               disabled={isConnecting || isDisconnecting || !connectionId}
-              onClick={() => openAgentChooserForResources([resource])}
+              onClick={() => void handleSyncResourceForCurrentAgent(resource)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw className="size-3" />
-              <span>Sync to Agent</span>
+              <span>Sync</span>
             </button>
           </div>
         );
       }
 
+      const effectiveStatus: KnowledgeDocumentStatus = isSyncingThis
+        ? 'processing'
+        : runtime?.error && runtime.status === 'failed'
+        ? 'failed'
+        : dbDoc?.status || runtime?.status || 'queued';
+
+      const isReady = effectiveStatus === 'ready' && !isSyncingThis;
+      const isFailed = effectiveStatus === 'failed' && !isSyncingThis;
+      const isProcessing = isSyncingThis || effectiveStatus === 'processing';
+
+      const effectiveChunkCount =
+        typeof dbDoc?.chunkCount === 'number'
+          ? dbDoc.chunkCount
+          : typeof runtime?.chunkCount === 'number'
+          ? runtime.chunkCount
+          : null;
+
+      const effectiveSourceModified =
+        dbDoc?.sourceModifiedTime || runtime?.sourceModifiedTime || null;
+      const formattedSourceModified = formatDateTimeLabel(
+        effectiveSourceModified
+      );
+
+      const rawErrorMessage =
+        runtime?.error || (isFailed ? dbDoc?.errorMessage || null : null);
+      const classifiedError = rawErrorMessage
+        ? classifyKnowledgeProcessingError({
+            message: rawErrorMessage,
+            stage: runtime?.stage ?? null,
+            reconnectRequired: runtime?.reconnectRequired ?? false,
+          })
+        : null;
+
+      const statusBadgeClass = isReady
+        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+        : isFailed
+        ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
+        : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25';
+
+      const statusLabel = isProcessing
+        ? 'Processing'
+        : isReady
+        ? 'Ready'
+        : isFailed
+        ? 'Failed'
+        : 'Queued';
+
       return (
         <div className="pl-0 sm:pl-10 space-y-2 pt-2 border-t border-border/60">
-          {entries.map(({ agentId: entryAgentId, doc, runtime }) => {
-            const syncKey = `${resource.id}:${entryAgentId}`;
-            const isSyncingThis = Boolean(syncingKeys[syncKey]);
+          <div className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                <span
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${statusBadgeClass}`}
+                >
+                  {isProcessing ? (
+                    <Loader2 className="size-2.5 animate-spin" />
+                  ) : isReady ? (
+                    <CheckCircle2 className="size-2.5" />
+                  ) : isFailed ? (
+                    <AlertCircle className="size-2.5" />
+                  ) : (
+                    <Clock className="size-2.5" />
+                  )}
+                  <span>{statusLabel}</span>
+                </span>
 
-            const effectiveStatus: KnowledgeDocumentStatus = isSyncingThis
-              ? 'processing'
-              : runtime?.error && runtime.status === 'failed'
-              ? 'failed'
-              : doc?.status || runtime?.status || 'queued';
+                {effectiveChunkCount !== null &&
+                  (isReady || effectiveChunkCount > 0) && (
+                    <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
+                      {effectiveChunkCount}{' '}
+                      {effectiveChunkCount === 1 ? 'chunk' : 'chunks'}
+                    </span>
+                  )}
 
-            const isReady = effectiveStatus === 'ready' && !isSyncingThis;
-            const isFailed = effectiveStatus === 'failed' && !isSyncingThis;
-            const isProcessing =
-              isSyncingThis || effectiveStatus === 'processing';
+                {formattedSourceModified && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Source modified {formattedSourceModified}
+                  </span>
+                )}
+              </div>
 
-            const effectiveChunkCount =
-              typeof doc?.chunkCount === 'number'
-                ? doc.chunkCount
-                : typeof runtime?.chunkCount === 'number'
-                ? runtime.chunkCount
-                : null;
+              <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                <button
+                  type="button"
+                  disabled={isSyncingThis || isConnecting || isDisconnecting}
+                  onClick={() => void handleSyncResourceForCurrentAgent(resource)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-border bg-background hover:bg-accent px-2.5 py-1 text-[11px] font-semibold text-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw
+                    className={`size-3 ${isSyncingThis ? 'animate-spin' : ''}`}
+                  />
+                  <span>
+                    {isSyncingThis
+                      ? 'Syncing…'
+                      : isFailed
+                      ? 'Retry'
+                      : 'Sync'}
+                  </span>
+                </button>
+              </div>
+            </div>
 
-            const effectiveSourceModified =
-              doc?.sourceModifiedTime || runtime?.sourceModifiedTime || null;
-            const formattedSourceModified = formatDateTimeLabel(
-              effectiveSourceModified
-            );
-
-            const effectiveError =
-              runtime?.error || (isFailed ? doc?.errorMessage || null : null);
-            const effectiveStage = runtime?.stage || null;
-            const needsReconnect = Boolean(runtime?.reconnectRequired);
-
-            const targetAgentLabel =
-              agentNameById.get(entryAgentId) ||
-              (entryAgentId === agentId ? 'Current Agent' : 'Workspace Agent');
-
-            const statusBadgeClass = isReady
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-              : isFailed
-              ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
-              : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25';
-
-            const statusLabel = isProcessing
-              ? 'Processing'
-              : isReady
-              ? 'Ready'
-              : isFailed
-              ? 'Failed'
-              : 'Queued';
-
-            return (
+            {classifiedError && (
               <div
-                key={syncKey}
-                className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 space-y-1.5"
+                className={`rounded-lg border px-2.5 py-2 flex flex-col sm:flex-row sm:items-start justify-between gap-2 ${
+                  classifiedError.category === 'google_auth'
+                    ? 'border-amber-500/30 bg-amber-500/10'
+                    : 'border-red-500/25 bg-red-500/10'
+                }`}
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-                    <span className="inline-flex items-center gap-1 font-semibold text-foreground">
-                      <Bot className="size-3 text-muted-foreground" />
-                      <span>{targetAgentLabel}</span>
-                    </span>
-
-                    <span
-                      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${statusBadgeClass}`}
-                    >
-                      {isProcessing ? (
-                        <Loader2 className="size-2.5 animate-spin" />
-                      ) : isReady ? (
-                        <CheckCircle2 className="size-2.5" />
-                      ) : isFailed ? (
-                        <AlertCircle className="size-2.5" />
-                      ) : (
-                        <Clock className="size-2.5" />
+                <div className="flex items-start gap-2 min-w-0">
+                  {classifiedError.category === 'openai_embedding_auth' ? (
+                    <KeyRound className="size-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle
+                      className={`size-3.5 shrink-0 mt-0.5 ${
+                        classifiedError.category === 'google_auth'
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-red-600 dark:text-red-400'
+                      }`}
+                    />
+                  )}
+                  <div className="space-y-1 min-w-0 text-[11px] leading-snug break-words">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`font-semibold ${
+                          classifiedError.category === 'google_auth'
+                            ? 'text-amber-800 dark:text-amber-200'
+                            : 'text-red-700 dark:text-red-300'
+                        }`}
+                      >
+                        {classifiedError.title}
+                      </span>
+                      {classifiedError.stage && (
+                        <span
+                          className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            classifiedError.category === 'google_auth'
+                              ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200'
+                              : 'bg-red-500/15 text-red-700 dark:text-red-300'
+                          }`}
+                        >
+                          stage: {classifiedError.stage}
+                        </span>
                       )}
-                      <span>{statusLabel}</span>
-                    </span>
-
-                    {effectiveChunkCount !== null && (isReady || effectiveChunkCount > 0) && (
-                      <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
-                        {effectiveChunkCount}{' '}
-                        {effectiveChunkCount === 1 ? 'chunk' : 'chunks'}
-                      </span>
-                    )}
-
-                    {formattedSourceModified && (
-                      <span className="text-[10px] text-muted-foreground">
-                        Source modified {formattedSourceModified}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-                    <button
-                      type="button"
-                      disabled={isSyncingThis || isConnecting || isDisconnecting}
-                      onClick={() =>
-                        void handleSyncResourceToAgent(resource, entryAgentId)
+                    </div>
+                    <p
+                      className={
+                        classifiedError.category === 'google_auth'
+                          ? 'text-amber-800/90 dark:text-amber-200/90'
+                          : 'text-red-700/90 dark:text-red-300/90'
                       }
-                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background hover:bg-accent px-2.5 py-1 text-[11px] font-semibold text-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <RefreshCw
-                        className={`size-3 ${isSyncingThis ? 'animate-spin' : ''}`}
-                      />
-                      <span>
-                        {isSyncingThis
-                          ? 'Syncing…'
-                          : isFailed
-                          ? 'Retry'
-                          : 'Sync'}
-                      </span>
-                    </button>
+                      {classifiedError.summary}
+                    </p>
+                    <p
+                      className={`text-[10px] font-mono opacity-85 ${
+                        classifiedError.category === 'google_auth'
+                          ? 'text-amber-900 dark:text-amber-100'
+                          : 'text-red-800 dark:text-red-200'
+                      }`}
+                    >
+                      {classifiedError.detail}
+                    </p>
                   </div>
                 </div>
 
-                {effectiveError && (
-                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-2.5 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="flex items-start gap-2 min-w-0">
-                      <AlertCircle className="size-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                      <div className="text-[11px] text-red-700 dark:text-red-300 leading-snug break-words">
-                        <span>{effectiveError}</span>
-                        {effectiveStage && (
-                          <span className="ml-1.5 inline-flex items-center rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold">
-                            stage: {effectiveStage}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {needsReconnect && (
-                      <button
-                        type="button"
-                        disabled={isConnecting || isDisconnecting}
-                        onClick={() => void handleConnectDocs()}
-                        className="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-[11px] font-semibold shrink-0 transition-colors cursor-pointer disabled:opacity-50"
-                      >
-                        <RefreshCw className="size-3" />
-                        <span>Reconnect Google Docs</span>
-                      </button>
-                    )}
-                  </div>
+                {classifiedError.category === 'google_auth' && (
+                  <button
+                    type="button"
+                    disabled={isConnecting || isDisconnecting}
+                    onClick={() => void handleConnectDocs()}
+                    className="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-[11px] font-semibold shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className="size-3" />
+                    <span>Reconnect Google Docs</span>
+                  </button>
                 )}
               </div>
-            );
-          })}
-
-          {savedAgents.length > entries.length && (
-            <div className="flex justify-end">
-              <button
-                type="button"
-                disabled={isConnecting || isDisconnecting || !connectionId}
-                onClick={() => openAgentChooserForResources([resource])}
-                className="text-[11px] font-semibold text-primary hover:underline cursor-pointer disabled:opacity-50"
-              >
-                + Sync to another agent
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       );
     },
     [
-      workspaceGoogleDocs,
-      runtimeSyncByKey,
-      syncingKeys,
+      agentGoogleDocs,
+      runtimeSyncByResource,
+      syncingResourceIds,
+      hasSavedCurrentAgent,
       isLoadingSyncedDocs,
+      agentName,
       isConnecting,
       isDisconnecting,
       connectionId,
-      agentNameById,
-      agentId,
-      savedAgents.length,
-      openAgentChooserForResources,
-      handleSyncResourceToAgent,
+      handleSyncResourceForCurrentAgent,
     ]
   );
 
   const readyDocsCount = useMemo(() => {
     const readyResourceIds = new Set<string>();
     for (const res of docsResources.resources) {
-      const hasReady = workspaceGoogleDocs.some(
+      const hasReady = agentGoogleDocs.some(
         (doc) => doc.status === 'ready' && matchesGoogleResource(doc, res)
       );
       if (hasReady) {
@@ -933,7 +903,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       }
     }
     return readyResourceIds.size;
-  }, [docsResources.resources, workspaceGoogleDocs]);
+  }, [docsResources.resources, agentGoogleDocs]);
 
   const isBusy = isConnecting || isDisconnecting;
 
@@ -1036,8 +1006,8 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {status === 'expired' || status === 'error'
                   ? lastError ||
-                    'Reconnect your Google Docs account with read-only permissions to select and sync documents into your Knowledge Base.'
-                  : 'Connect your Google Docs account with read-only permissions to select and sync native Google Docs into your Knowledge Base.'}
+                    'Reconnect your Google Docs account with read-only permissions to select and sync documents into this agent’s Knowledge Base.'
+                  : 'Connect your Google Docs account with read-only permissions to select and sync native Google Docs into this agent’s Knowledge Base.'}
               </p>
             </div>
 
@@ -1168,119 +1138,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
             onClearError={docsResources.clearResourcesError}
             renderResourceExtra={renderResourceSyncExtra}
           />
-        </div>
-      )}
-
-      {/* Target Agent Chooser Modal for Google Docs Knowledge Base Sync */}
-      {pendingSyncResources.length > 0 && (
-        <div
-          id="sync-google-doc-agent-backdrop"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
-          onClick={() => setPendingSyncResources([])}
-        >
-          <div
-            id="sync-google-doc-agent-modal"
-            className="w-full max-w-md rounded-2xl border border-border bg-background shadow-2xl overflow-hidden p-6 space-y-5 animate-in zoom-in-95 duration-150"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="sync-google-doc-agent-title"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-white dark:bg-muted p-2 shrink-0 shadow-2xs">
-                  <GoogleDocsLogo className="size-5" />
-                </div>
-                <div>
-                  <h3
-                    id="sync-google-doc-agent-title"
-                    className="text-base font-semibold text-foreground"
-                  >
-                    Choose Target Agent
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Knowledge Base documents are synced to a specific agent.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPendingSyncResources([])}
-                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/80 transition-colors cursor-pointer"
-                aria-label="Close dialog"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-1">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pendingSyncResources.length === 1
-                    ? 'Selected Google Doc'
-                    : `Selected Google Docs (${pendingSyncResources.length})`}
-                </p>
-                <ul className="space-y-1">
-                  {pendingSyncResources.map((res) => (
-                    <li
-                      key={res.id}
-                      className="text-xs font-medium text-foreground truncate"
-                    >
-                      {res.name}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {savedAgents.length === 0 ? (
-                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
-                  No saved agents were found in this workspace yet. Save an agent first, then click Sync to index this Google Doc into its Knowledge Base.
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="google-doc-target-agent-select"
-                    className="block text-xs font-semibold text-foreground"
-                  >
-                    Target Agent
-                  </label>
-                  <select
-                    id="google-doc-target-agent-select"
-                    value={chosenTargetAgentId}
-                    onChange={(e) => setChosenTargetAgentId(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none shadow-2xs"
-                  >
-                    <option value="">Select an agent…</option>
-                    {savedAgents.map((ag) => (
-                      <option key={ag.id} value={ag.id}>
-                        {ag.name}
-                        {ag.id === agentId ? ' (Current)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-border">
-              <button
-                type="button"
-                onClick={() => setPendingSyncResources([])}
-                className="rounded-xl border border-border bg-background px-4 py-2 text-xs font-medium text-foreground hover:bg-accent/70 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!isValidUuid(chosenTargetAgentId) || savedAgents.length === 0}
-                onClick={() => void handleConfirmTargetAgentSync()}
-                className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-              >
-                <RefreshCw className="size-3.5" />
-                <span>Sync to Knowledge Base</span>
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

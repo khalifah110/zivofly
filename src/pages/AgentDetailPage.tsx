@@ -58,6 +58,7 @@ import { supabase } from '../lib/supabaseClient';
 import {
   AgentTestConversation,
   AgentTestMessageRecord,
+  classifyKnowledgeProcessingError,
   CONFIG_DOC_TITLE,
   createSupabaseTestConversation,
   deleteSupabaseTestConversation,
@@ -909,8 +910,9 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
       const procMsg =
         procErr?.message ||
         'Document was saved, but chunking and embedding generation failed.';
+      const classified = classifyKnowledgeProcessingError({ message: procMsg });
       setKnowledgeError(procMsg);
-      toast.error(procMsg);
+      toast.error(`${classified.title}: ${procMsg}`, { duration: 9000 });
       return null;
     } finally {
       setProcessingDocIds((prev) => prev.filter((id) => id !== documentId));
@@ -950,11 +952,8 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
     setKnowledgeError(null);
 
     try {
-      const { workspaceId, agentId: resolvedAgentId } =
+      const { workspaceId, agentId: currentAgentId } =
         await resolveKnowledgeWorkspaceAndAgent();
-      const targetAgentId = isValidUuid(doc.agentId || '')
-        ? doc.agentId!
-        : resolvedAgentId;
 
       let connectionId =
         typeof meta.connection_id === 'string' ? meta.connection_id.trim() : '';
@@ -963,7 +962,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
         const { connectionsByService } =
           await getGoogleWorkspaceIntegrationConnections({
             workspaceId,
-            agentId: targetAgentId,
+            agentId: currentAgentId,
           });
         connectionId = connectionsByService.google_docs?.id || '';
       }
@@ -980,7 +979,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
         workspaceId,
         connectionId,
         resourceId,
-        agentId: targetAgentId,
+        agentId: currentAgentId,
       });
 
       // Reload persisted document row from Supabase so local state always reflects backend truth
@@ -1010,11 +1009,16 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
           }, Ready).`
         );
       } else if (outcome.error) {
-        const stageSuffix = outcome.stage ? ` [stage: ${outcome.stage}]` : '';
-        const errText = `${outcome.error}${stageSuffix}`;
+        const classified = classifyKnowledgeProcessingError({
+          message: outcome.error,
+          stage: outcome.stage,
+          reconnectRequired: outcome.reconnectRequired,
+        });
+        const stageSuffix = classified.stage ? ` [stage: ${classified.stage}]` : '';
+        const errText = `${classified.detail}${stageSuffix}`;
         setKnowledgeError(errText);
-        if (outcome.reconnectRequired) {
-          toast.error(errText, {
+        if (classified.category === 'google_auth') {
+          toast.error(`${classified.title}: ${errText}`, {
             duration: 9000,
             action: {
               label: 'Reconnect',
@@ -1022,7 +1026,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                 void startGoogleWorkspaceOAuth({
                   service: 'google_docs',
                   workspaceId,
-                  agentId: targetAgentId,
+                  agentId: currentAgentId,
                   returnTab: 'knowledge',
                 })
                   .then(({ authorizationUrl }) => {
@@ -1037,7 +1041,7 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
             },
           });
         } else {
-          toast.error(errText, { duration: 8000 });
+          toast.error(`${classified.title}: ${errText}`, { duration: 9000 });
         }
       } else {
         toast.info(
@@ -2817,7 +2821,8 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                 value={googleWorkspaceConfig}
                 workspaceId={verifiedWorkspaceId || agent?.workspaceId || null}
                 agentId={!isNewAgent ? agent?.id || null : null}
-                agents={agents}
+                agentName={name || agent?.name || null}
+                docsRefreshKey={docs.length}
                 onKnowledgeDocSynced={(syncedDoc, targetAgentId) => {
                   if (!isNewAgent && agent?.id && targetAgentId === agent.id) {
                     updateDocInState(
@@ -2837,28 +2842,62 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
               />
             )}
 
-            {/* Database Insertion Error Banner */}
-            {knowledgeError && (
-              <div className="flex items-start justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive">
-                <div className="flex items-start gap-2.5">
-                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                  <div className="space-y-0.5">
-                    <p className="font-semibold">Failed to save knowledge document</p>
-                    <p className="text-destructive/90 leading-relaxed break-words">
-                      {knowledgeError}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setKnowledgeError(null)}
-                  className="p-1 rounded-lg hover:bg-destructive/15 transition-colors shrink-0 cursor-pointer"
-                  title="Dismiss error"
+            {/* Classified Knowledge Base Error Banner */}
+            {knowledgeError && (() => {
+              const classifiedBannerError = classifyKnowledgeProcessingError({
+                message: knowledgeError,
+              });
+              const isGoogleAuthBanner =
+                classifiedBannerError.category === 'google_auth';
+
+              return (
+                <div
+                  className={`flex items-start justify-between gap-3 rounded-xl border p-3.5 text-xs ${
+                    isGoogleAuthBanner
+                      ? 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                      : 'border-destructive/30 bg-destructive/10 text-destructive'
+                  }`}
                 >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-            )}
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-semibold">{classifiedBannerError.title}</p>
+                        {classifiedBannerError.stage && (
+                          <span
+                            className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                              isGoogleAuthBanner
+                                ? 'bg-amber-500/20 text-amber-900 dark:text-amber-100'
+                                : 'bg-destructive/15 text-destructive'
+                            }`}
+                          >
+                            stage: {classifiedBannerError.stage}
+                          </span>
+                        )}
+                      </div>
+                      <p className="opacity-90 leading-relaxed break-words">
+                        {classifiedBannerError.summary}
+                      </p>
+                      <p className="text-[11px] font-mono opacity-80 leading-relaxed break-words">
+                        {classifiedBannerError.detail}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setKnowledgeError(null)}
+                    className={`p-1 rounded-lg transition-colors shrink-0 cursor-pointer ${
+                      isGoogleAuthBanner
+                        ? 'hover:bg-amber-500/20'
+                        : 'hover:bg-destructive/15'
+                    }`}
+                    title="Dismiss error"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           {/* List of Knowledge Docs */}
@@ -2959,11 +2998,33 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                               {doc.content}
                             </p>
                           )}
-                          {isDocFailed && doc.errorMessage && (
-                            <p className="text-[11px] text-destructive font-medium leading-snug pt-0.5">
-                              Error: {doc.errorMessage}
-                            </p>
-                          )}
+                          {isDocFailed && doc.errorMessage && (() => {
+                            const classifiedDocErr = classifyKnowledgeProcessingError({
+                              message: doc.errorMessage,
+                            });
+                            return (
+                              <div
+                                className={`rounded-lg border px-2.5 py-1.5 mt-1 space-y-0.5 text-[11px] leading-snug ${
+                                  classifiedDocErr.category === 'google_auth'
+                                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                                    : 'border-destructive/25 bg-destructive/10 text-destructive'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 flex-wrap font-semibold">
+                                  <span>{classifiedDocErr.title}</span>
+                                  {classifiedDocErr.stage && (
+                                    <span className="rounded bg-current/10 px-1.5 py-0.5 text-[10px]">
+                                      stage: {classifiedDocErr.stage}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="opacity-90">{classifiedDocErr.summary}</p>
+                                <p className="text-[10px] font-mono opacity-80 break-words">
+                                  {classifiedDocErr.detail}
+                                </p>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
