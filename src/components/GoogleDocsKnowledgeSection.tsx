@@ -19,6 +19,7 @@ import {
   KnowledgeDocumentStatus,
 } from '../types';
 import { GoogleDocsLogo } from './BrandLogos';
+import { supabase } from '../lib/supabaseClient';
 import {
   classifyKnowledgeProcessingError,
   createEmptyGoogleConnectionsMap,
@@ -46,6 +47,7 @@ interface GoogleDocsKnowledgeSectionProps {
   agentName?: string | null;
   docsRefreshKey?: number;
   onKnowledgeDocSynced?: (doc: KnowledgeDocument, targetAgentId: string) => void;
+  onKnowledgeDocRemoved?: (docId: string) => void;
 }
 
 interface RuntimeSyncEntry {
@@ -131,6 +133,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   agentName,
   docsRefreshKey = 0,
   onKnowledgeDocSynced,
+  onKnowledgeDocRemoved,
 }) => {
   const [resolvedWorkspaceId, setResolvedWorkspaceId] = useState<string | null>(
     workspaceId || null
@@ -143,13 +146,15 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
   const [resourceToRemove, setResourceToRemove] =
     useState<GoogleAuthorizedResource | null>(null);
+  const [isRemovingAgentDoc, setIsRemovingAgentDoc] = useState<boolean>(false);
   const [oauthDiagnosticError, setOauthDiagnosticError] = useState<{
     title: string;
     message: string;
   } | null>(null);
 
-  // Real backend knowledge_documents state for Google Docs in this workspace
-  // Used to strictly isolate each agent's own Google Docs and hide docs owned by other agents
+  // Real backend knowledge_documents state for Google Docs in this workspace.
+  // Each agent only displays its own Google Docs, while allowing the same Google Doc
+  // to be independently selected and indexed by another agent in its own Knowledge tab.
   const [workspaceGoogleDocs, setWorkspaceGoogleDocs] = useState<
     KnowledgeDocument[]
   >([]);
@@ -160,6 +165,9 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
   const [runtimeSyncByResource, setRuntimeSyncByResource] = useState<
     Record<string, RuntimeSyncEntry>
   >({});
+  const [sessionPickedResourceIds, setSessionPickedResourceIds] = useState<
+    string[]
+  >([]);
   const [reconnectRequiredBanner, setReconnectRequiredBanner] = useState<
     string | null
   >(null);
@@ -172,6 +180,10 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     onKnowledgeDocSynced
   );
   onKnowledgeDocSyncedRef.current = onKnowledgeDocSynced;
+  const onKnowledgeDocRemovedRef = useRef<typeof onKnowledgeDocRemoved>(
+    onKnowledgeDocRemoved
+  );
+  onKnowledgeDocRemovedRef.current = onKnowledgeDocRemoved;
 
   const hasSavedCurrentAgent = Boolean(agentId && isValidUuid(agentId));
 
@@ -179,10 +191,11 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     setResolvedWorkspaceId(workspaceId || null);
   }, [workspaceId]);
 
-  // Reset per-agent runtime sync cache when switching to a different agent
+  // Reset per-agent runtime state when switching to a different agent
   useEffect(() => {
     setRuntimeSyncByResource({});
     setSyncingResourceIds({});
+    setSessionPickedResourceIds([]);
     setReconnectRequiredBanner(null);
   }, [agentId]);
 
@@ -491,14 +504,108 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     }
   };
 
+  const removeResourceFromCurrentAgentConfig = useCallback(
+    (resourceId: string) => {
+      setSessionPickedResourceIds((prev) => prev.filter((id) => id !== resourceId));
+      setRuntimeSyncByResource((prev) => {
+        if (!prev[resourceId]) return prev;
+        const next = { ...prev };
+        delete next[resourceId];
+        return next;
+      });
+      if (!onChangeRef.current) return;
+      const currentDocs = valueRef.current?.docs;
+      if (!currentDocs || !Array.isArray(currentDocs.selectedResourceIds)) {
+        return;
+      }
+      const nextIds = currentDocs.selectedResourceIds.filter(
+        (id) => id !== resourceId
+      );
+      if (nextIds.length !== currentDocs.selectedResourceIds.length) {
+        onChangeRef.current({
+          ...(valueRef.current || {}),
+          docs: {
+            ...currentDocs,
+            selectedResourceIds: nextIds,
+          },
+        });
+      }
+    },
+    []
+  );
+
   const handleConfirmRemoveResource = useCallback(async () => {
-    if (!resourceToRemove || docsResources.removingResourceId) return;
-    const removed = await docsResources.removeResource(resourceToRemove);
-    if (removed) {
-      setResourceToRemove(null);
-      void refreshSyncedGoogleDocs();
+    if (!resourceToRemove || docsResources.removingResourceId || isRemovingAgentDoc) {
+      return;
     }
-  }, [resourceToRemove, docsResources, refreshSyncedGoogleDocs]);
+
+    setIsRemovingAgentDoc(true);
+    try {
+      const matchingCurrentAgentDocs = agentGoogleDocs.filter((doc) =>
+        matchesGoogleResource(doc, resourceToRemove)
+      );
+      const usedByOtherAgent = otherAgentGoogleDocs.some((doc) =>
+        matchesGoogleResource(doc, resourceToRemove)
+      );
+
+      // Delete this agent's own knowledge_documents row(s) and chunks
+      if (supabase && effectiveWorkspaceId && agentId && isValidUuid(agentId)) {
+        for (const agentDoc of matchingCurrentAgentDocs) {
+          await supabase
+            .from('knowledge_chunks')
+            .delete()
+            .eq('document_id', agentDoc.id)
+            .eq('workspace_id', effectiveWorkspaceId);
+
+          const { error: delErr } = await supabase
+            .from('knowledge_documents')
+            .delete()
+            .eq('id', agentDoc.id)
+            .eq('workspace_id', effectiveWorkspaceId)
+            .eq('agent_id', agentId);
+
+          if (delErr) {
+            throw new Error(delErr.message);
+          }
+
+          onKnowledgeDocRemovedRef.current?.(agentDoc.id);
+        }
+      }
+
+      removeResourceFromCurrentAgentConfig(resourceToRemove.id);
+
+      // Only revoke the workspace-level Google Picker resource if no other agent also uses it
+      if (!usedByOtherAgent) {
+        const removed = await docsResources.removeResource(resourceToRemove);
+        if (!removed) {
+          return;
+        }
+      } else {
+        toast.success(
+          `Removed "${resourceToRemove.name}" from this agent’s Knowledge Base.`
+        );
+      }
+
+      setResourceToRemove(null);
+      await refreshSyncedGoogleDocs();
+    } catch (err: any) {
+      toast.error(
+        err?.message || `Could not remove "${resourceToRemove.name}" from this agent.`
+      );
+    } finally {
+      setIsRemovingAgentDoc(false);
+    }
+  }, [
+    resourceToRemove,
+    docsResources,
+    isRemovingAgentDoc,
+    agentGoogleDocs,
+    otherAgentGoogleDocs,
+    effectiveWorkspaceId,
+    agentId,
+    removeResourceFromCurrentAgentConfig,
+    refreshSyncedGoogleDocs,
+  ]);
 
   /**
    * Automatically syncs a selected Google Doc to the currently open agent's Knowledge Base.
@@ -665,35 +772,16 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       return;
     }
 
-    const latestWorkspaceDocs = await refreshSyncedGoogleDocs(effectiveWorkspaceId);
-
     for (const resource of pickedResources) {
-      const ownedByCurrent = latestWorkspaceDocs.some(
-        (doc) => doc.agentId === agentId && matchesGoogleResource(doc, resource)
+      setSessionPickedResourceIds((prev) =>
+        prev.includes(resource.id) ? prev : [...prev, resource.id]
       );
-      const ownedByOther = latestWorkspaceDocs.some(
-        (doc) =>
-          Boolean(doc.agentId) &&
-          doc.agentId !== agentId &&
-          matchesGoogleResource(doc, resource)
-      );
-
-      if (ownedByOther && !ownedByCurrent) {
-        toast.error(
-          `"${resource.name}" is already assigned to another agent. Each Google Doc can only be accessed by the agent where it was selected.`,
-          { duration: 8000 }
-        );
-        continue;
-      }
-
       recordResourceForCurrentAgent(resource.id);
       await handleSyncResourceForCurrentAgent(resource);
     }
   }, [
     docsResources,
     agentId,
-    effectiveWorkspaceId,
-    refreshSyncedGoogleDocs,
     recordResourceForCurrentAgent,
     handleSyncResourceForCurrentAgent,
   ]);
@@ -935,23 +1023,45 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
     ]
   );
 
-  // Only show Google Docs belonging to the currently open agent (or not yet assigned to any other agent).
-  // Any Google Doc already owned by another agent is completely hidden here.
+  // An agent can ONLY see Google Docs that belong to its own Knowledge tab.
+  // Another agent in the same workspace can still independently select the same Google Doc
+  // from its own Knowledge tab, and each agent only sees documents in its own section.
   const visibleAgentResources = useMemo(() => {
+    if (!agentId || !isValidUuid(agentId)) {
+      return [];
+    }
+
+    const agentConfigResourceIds = new Set(
+      Array.isArray(value?.docs?.selectedResourceIds)
+        ? value.docs.selectedResourceIds
+        : []
+    );
+
     return docsResources.resources.filter((resource) => {
-      const ownedByCurrent = agentGoogleDocs.some((doc) =>
+      const hasCurrentAgentDoc = agentGoogleDocs.some((doc) =>
         matchesGoogleResource(doc, resource)
       );
-      if (ownedByCurrent) return true;
-
-      const ownedByOther = otherAgentGoogleDocs.some((doc) =>
-        matchesGoogleResource(doc, resource)
+      const hasCurrentAgentRuntimeSync = Boolean(
+        runtimeSyncByResource[resource.id]
       );
-      if (ownedByOther) return false;
+      const hasCurrentAgentSelection =
+        agentConfigResourceIds.has(resource.id) ||
+        sessionPickedResourceIds.includes(resource.id);
 
-      return true;
+      return (
+        hasCurrentAgentDoc ||
+        hasCurrentAgentRuntimeSync ||
+        hasCurrentAgentSelection
+      );
     });
-  }, [docsResources.resources, agentGoogleDocs, otherAgentGoogleDocs]);
+  }, [
+    agentId,
+    value?.docs?.selectedResourceIds,
+    docsResources.resources,
+    agentGoogleDocs,
+    runtimeSyncByResource,
+    sessionPickedResourceIds,
+  ]);
 
   const readyDocsCount = useMemo(() => {
     const readyResourceIds = new Set<string>();
@@ -1197,10 +1307,11 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         service="google_docs"
         isRemoving={Boolean(
           resourceToRemove &&
-            docsResources.removingResourceId === resourceToRemove.id
+            (isRemovingAgentDoc ||
+              docsResources.removingResourceId === resourceToRemove.id)
         )}
         onCancel={() => {
-          if (!docsResources.removingResourceId) {
+          if (!docsResources.removingResourceId && !isRemovingAgentDoc) {
             setResourceToRemove(null);
           }
         }}

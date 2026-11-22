@@ -1363,7 +1363,37 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
         return;
       }
 
+      const deletedDoc = docs.find((d) => d.id === id);
+      const deletedResourceId =
+        deletedDoc?.sourceType === 'google_doc'
+          ? (typeof deletedDoc.metadata?.resource_id === 'string' &&
+              deletedDoc.metadata.resource_id.trim()) ||
+            (typeof deletedDoc.metadata?.google_resource_id === 'string' &&
+              deletedDoc.metadata.google_resource_id.trim()) ||
+            (typeof deletedDoc.metadata?.selected_resource_id === 'string' &&
+              deletedDoc.metadata.selected_resource_id.trim()) ||
+            null
+          : null;
+
+      if (
+        deletedResourceId &&
+        Array.isArray(googleWorkspaceConfig.docs?.selectedResourceIds)
+      ) {
+        setGoogleWorkspaceConfig((prev) => ({
+          ...prev,
+          docs: prev.docs
+            ? {
+                ...prev.docs,
+                selectedResourceIds: (prev.docs.selectedResourceIds || []).filter(
+                  (rid) => rid !== deletedResourceId
+                ),
+              }
+            : prev.docs,
+        }));
+      }
+
       const nextDocs = docs.filter((d) => d.id !== id);
+      docsRef.current = nextDocs;
       setDocs(nextDocs);
       if (agent) {
         onAgentUpdated({
@@ -2831,6 +2861,20 @@ export const AgentDetailPage: React.FC<AgentDetailPageProps> = ({
                         verifiedWorkspaceId ||
                         agent.workspaceId
                     );
+                  }
+                }}
+                onKnowledgeDocRemoved={(removedDocId) => {
+                  const nextDocs = docsRef.current.filter(
+                    (d) => d.id !== removedDocId
+                  );
+                  docsRef.current = nextDocs;
+                  setDocs(nextDocs);
+                  if (agent) {
+                    onAgentUpdated({
+                      ...agent,
+                      workspaceId: verifiedWorkspaceId || agent.workspaceId,
+                      knowledgeDocs: nextDocs,
+                    });
                   }
                 }}
                 onChange={(updated) => {
