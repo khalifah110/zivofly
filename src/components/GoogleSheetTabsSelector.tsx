@@ -265,11 +265,6 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
               <span className="text-[11px] font-semibold text-foreground truncate max-w-[260px] sm:max-w-[340px]">
                 {spreadsheetTitle}
               </span>
-              {hasLoadedTabs && (
-                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-background text-muted-foreground border border-border">
-                  {tabs.length} {tabs.length === 1 ? 'tab' : 'tabs'}
-                </span>
-              )}
               {hasSavedAgent && hasLoadedSavedConfig && (
                 savedSheetIds.length > 0 ? (
                   <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">

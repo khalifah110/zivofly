@@ -357,7 +357,7 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
             <span className="text-xs font-semibold text-foreground">
               {copy.sectionTitle}
             </span>
-            {status === 'connected' && (
+            {status === 'connected' && service !== 'google_sheets_service' && (
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
                 {activeCount} Active
               </span>
@@ -589,12 +589,15 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                               <span className="text-xs font-medium text-foreground truncate max-w-[260px] sm:max-w-[340px]">
                                 {resource.name}
                               </span>
-                              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
-                                {resource.resource_type}
-                              </span>
+                              {service !== 'google_sheets_service' && (
+                                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
+                                  {resource.resource_type}
+                                </span>
+                              )}
                               {renderResourceStatusBadge ? (
                                 renderResourceStatusBadge(resource)
-                              ) : resource.status === 'active' ? (
+                              ) : resource.status === 'active' &&
+                                service !== 'google_sheets_service' ? (
                                 <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                                   <CheckCircle2 className="size-2.5" />
                                   <span>Authorized</span>
