@@ -429,7 +429,7 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
             )}
 
             {/* Tab checkboxes list */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <div className="flex flex-col gap-1.5">
               {tabs.map((tab) => {
                 const isSelected = draftSheetIds.includes(tab.sheet_id);
                 const isDisabled =
