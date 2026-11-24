@@ -377,6 +377,8 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
               title={
                 service === 'google_docs'
                   ? 'Sync selected Google Docs'
+                  : service === 'google_sheets_service'
+                  ? 'Refresh Google Sheets and tabs'
                   : `Refresh authorized ${copy.serviceLabel} resources`
               }
               className="inline-flex items-center justify-center rounded-xl border border-border bg-background p-2 text-muted-foreground hover:text-foreground hover:bg-accent/70 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"

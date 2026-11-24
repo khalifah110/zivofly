@@ -168,6 +168,26 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
   const [sheetsTabRefreshByResource, setSheetsTabRefreshByResource] = useState<
     Record<string, number>
   >({});
+  const [loadingSheetTabIds, setLoadingSheetTabIds] = useState<
+    Record<string, boolean>
+  >({});
+
+  const handleSheetTabsLoadingChange = useCallback(
+    (resourceId: string, loading: boolean) => {
+      setLoadingSheetTabIds((prev) => {
+        if (Boolean(prev[resourceId]) === loading) return prev;
+        if (!loading) {
+          const next = { ...prev };
+          delete next[resourceId];
+          return next;
+        }
+        return { ...prev, [resourceId]: true };
+      });
+    },
+    []
+  );
+
+  const isAnySheetTabsLoading = Object.values(loadingSheetTabIds).some(Boolean);
 
   const valueRef = useRef<GoogleWorkspaceConfig | undefined>(value);
   valueRef.current = value;
@@ -965,7 +985,11 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                         activeCount={serviceHook.activeCount}
                         needsScopeReauth={serviceHook.needsScopeReauth}
                         scopeReauthMessage={serviceHook.scopeReauthMessage}
-                        isLoadingResources={serviceHook.isLoadingResources}
+                        isLoadingResources={
+                          serviceHook.isLoadingResources ||
+                          (resourceServiceKey === 'google_sheets_service' &&
+                            isAnySheetTabsLoading)
+                        }
                         isFetchingPickerToken={serviceHook.isFetchingPickerToken}
                         isPickerOpen={serviceHook.isPickerOpen}
                         isSavingSelection={serviceHook.isSavingSelection}
@@ -1032,6 +1056,7 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                                     (sheetsTabRefreshByResource[resource.id] || 0)
                                   }
                                   isBusyConnectingOrDisconnecting={isBusy}
+                                  onLoadingChange={handleSheetTabsLoadingChange}
                                   onReconnectSheets={() =>
                                     void handleConnect('sheets', 'Google Sheets')
                                   }

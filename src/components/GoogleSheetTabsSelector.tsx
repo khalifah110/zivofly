@@ -30,6 +30,7 @@ interface GoogleSheetTabsSelectorProps {
   resource: GoogleAuthorizedResource;
   refreshTrigger?: number;
   isBusyConnectingOrDisconnecting?: boolean;
+  onLoadingChange?: (resourceId: string, loading: boolean) => void;
   onReconnectSheets: () => void;
 }
 
@@ -47,6 +48,7 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
   resource,
   refreshTrigger = 0,
   isBusyConnectingOrDisconnecting = false,
+  onLoadingChange,
   onReconnectSheets,
 }) => {
   const hasSavedAgent = Boolean(agentId && isValidUuid(agentId));
@@ -63,6 +65,20 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
     useState<ClassifiedGoogleSheetTabError | null>(null);
 
   const requestSeqRef = useRef<number>(0);
+  const lastRefreshTriggerRef = useRef<number>(refreshTrigger);
+  const onLoadingChangeRef = useRef(onLoadingChange);
+  onLoadingChangeRef.current = onLoadingChange;
+
+  useEffect(() => {
+    onLoadingChangeRef.current?.(resource.id, isLoading);
+  }, [resource.id, isLoading]);
+
+  useEffect(() => {
+    const id = resource.id;
+    return () => {
+      onLoadingChangeRef.current?.(id, false);
+    };
+  }, [resource.id]);
 
   const loadTabsAndSavedSelection = useCallback(
     async (opts?: { preserveDraft?: boolean }) => {
@@ -135,6 +151,7 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
   // saved tab selection is never displayed for the currently open agent.
   useEffect(() => {
     requestSeqRef.current += 1;
+    lastRefreshTriggerRef.current = refreshTrigger;
     setSpreadsheetTitle(resource.name);
     setTabs([]);
     setSavedSheetIds([]);
@@ -150,9 +167,15 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
     connectionId,
     resource.id,
     resource.name,
-    refreshTrigger,
     loadTabsAndSavedSelection,
   ]);
+
+  // Triggered by the single top Refresh button to reload tabs and saved selections in place
+  useEffect(() => {
+    if (refreshTrigger === lastRefreshTriggerRef.current) return;
+    lastRefreshTriggerRef.current = refreshTrigger;
+    void loadTabsAndSavedSelection();
+  }, [refreshTrigger, loadTabsAndSavedSelection]);
 
   const tabById = useMemo(() => {
     const map = new Map<number, GoogleSpreadsheetTab>();
@@ -257,51 +280,36 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
   return (
     <div className="pl-0 sm:pl-10 pt-2.5 border-t border-border/60">
       <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-2.5">
-        {/* Header: Spreadsheet title + selection summary + Refresh button */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="min-w-0 space-y-0.5">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <Table2 className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span className="text-[11px] font-semibold text-foreground truncate max-w-[260px] sm:max-w-[340px]">
-                {spreadsheetTitle}
-              </span>
-              {hasSavedAgent && hasLoadedSavedConfig && (
-                savedSheetIds.length > 0 ? (
-                  <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    <CheckCircle2 className="size-2.5" />
-                    <span>
-                      {savedSheetIds.length} saved
-                    </span>
+        {/* Header: Spreadsheet title + selection summary */}
+        <div className="min-w-0 space-y-0.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Table2 className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span className="text-[11px] font-semibold text-foreground truncate max-w-[260px] sm:max-w-[340px]">
+              {spreadsheetTitle}
+            </span>
+            {hasSavedAgent && hasLoadedSavedConfig && (
+              savedSheetIds.length > 0 ? (
+                <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <CheckCircle2 className="size-2.5" />
+                  <span>
+                    {savedSheetIds.length} saved
                   </span>
-                ) : (
-                  <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
-                    No tabs selected
-                  </span>
-                )
-              )}
-              {isDirty && hasSavedAgent && (
-                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
-                  Unsaved changes
                 </span>
-              )}
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              Choose which tabs this agent is configured to access in this spreadsheet.
-            </p>
+              ) : (
+                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
+                  No tabs selected
+                </span>
+              )
+            )}
+            {isDirty && hasSavedAgent && (
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                Unsaved changes
+              </span>
+            )}
           </div>
-
-          <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-            <button
-              type="button"
-              onClick={() => void loadTabsAndSavedSelection()}
-              disabled={isLoading || isSaving || isBusyConnectingOrDisconnecting}
-              title="Refresh spreadsheet tabs from Google Sheets"
-              className="inline-flex items-center gap-1 rounded-lg border border-border bg-background hover:bg-accent px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className={`size-3 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>Refresh tabs</span>
-            </button>
-          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Choose which tabs this agent is configured to access in this spreadsheet.
+          </p>
         </div>
 
         {/* Unsaved agent notice */}
