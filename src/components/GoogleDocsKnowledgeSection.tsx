@@ -1186,14 +1186,6 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
                     Reauthorization required
                   </span>
                 )}
-                {!docsResources.needsScopeReauth && visibleAgentResources.length > 0 && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-muted text-foreground/85 border border-border">
-                    <span>
-                      {visibleAgentResources.length}{' '}
-                      {visibleAgentResources.length === 1 ? 'Doc' : 'Docs'} selected
-                    </span>
-                  </span>
-                )}
                 {accountEmail && (
                   <span
                     title={`Connected Google account for Google Docs: ${accountEmail}`}

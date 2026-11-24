@@ -357,7 +357,9 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
             <span className="text-xs font-semibold text-foreground">
               {copy.sectionTitle}
             </span>
-            {status === 'connected' && service !== 'google_sheets_service' && (
+            {status === 'connected' &&
+              service !== 'google_sheets_service' &&
+              service !== 'google_docs' && (
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
                 {activeCount} Active
               </span>
@@ -591,7 +593,8 @@ export const AuthorizedResourcesSection: React.FC<AuthorizedResourcesSectionProp
                               <span className="text-xs font-medium text-foreground truncate max-w-[260px] sm:max-w-[340px]">
                                 {resource.name}
                               </span>
-                              {service !== 'google_sheets_service' && (
+                              {service !== 'google_sheets_service' &&
+                                service !== 'google_docs' && (
                                 <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border">
                                   {resource.resource_type}
                                 </span>

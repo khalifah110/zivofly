@@ -838,13 +838,6 @@ export const GoogleWorkspaceSection: React.FC<GoogleWorkspaceSectionProps> = ({
                                 Not connected
                               </span>
                             )}
-                            {app.status === 'connected' &&
-                              app.service !== 'google_sheets_service' && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                                <CheckCircle2 className="size-2.5" />
-                                <span>Active</span>
-                              </span>
-                            )}
                             {resourceStatusBadge && (
                               <span
                                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
