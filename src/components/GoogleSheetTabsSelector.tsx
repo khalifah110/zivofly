@@ -171,11 +171,6 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
     });
   }, [hasLoadedTabs, draftSheetIds, tabById]);
 
-  const visibleTabsCount = useMemo(
-    () => tabs.filter((t) => !t.hidden).length,
-    [tabs]
-  );
-
   const isDirty = useMemo(
     () => !areSheetIdListsEqual(draftSheetIds, savedSheetIds),
     [draftSheetIds, savedSheetIds]
@@ -480,22 +475,18 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
 
             {/* Clear no-tabs-selected state + Save/Clear controls */}
             {hasSavedAgent && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1.5 border-t border-border/60">
-                <div className="text-[11px] text-muted-foreground">
-                  {draftSheetIds.length === 0 ? (
+              <div
+                className={`flex flex-col sm:flex-row sm:items-center gap-2 pt-1.5 border-t border-border/60 ${
+                  draftSheetIds.length === 0 ? 'justify-between' : 'justify-end'
+                }`}
+              >
+                {draftSheetIds.length === 0 && (
+                  <div className="text-[11px] text-muted-foreground">
                     <span>
                       No tabs selected. Saving an empty selection clears tab access and disables the four Sheets tools for this connection.
                     </span>
-                  ) : (
-                    <span>
-                      <span className="font-semibold text-foreground">
-                        {draftSheetIds.length}
-                      </span>{' '}
-                      of {visibleTabsCount} visible{' '}
-                      {visibleTabsCount === 1 ? 'tab' : 'tabs'} selected for this agent.
-                    </span>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
                   {draftSheetIds.length > 0 && (
@@ -533,10 +524,6 @@ export const GoogleSheetTabsSelector: React.FC<GoogleSheetTabsSelectorProps> = (
                 </div>
               </div>
             )}
-
-            <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Tab selections are saved per agent for Sheets tools (sheets.read, sheets.lookup, sheets.append_row, sheets.update_row). Backend tool execution and runtime tab allowlist enforcement are not yet enabled.
-            </p>
           </div>
         ) : null}
       </div>
