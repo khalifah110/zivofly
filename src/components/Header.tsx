@@ -333,7 +333,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Coins className="size-4.5 text-emerald-600 dark:text-emerald-400" />
-                <span>Billing &amp; Tokens</span>
+                <span>Billing</span>
               </button>
 
               <button

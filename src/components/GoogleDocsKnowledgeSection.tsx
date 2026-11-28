@@ -693,6 +693,18 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
         if (outcome.success && outcome.isReady && outcome.status === 'ready') {
           setReconnectRequiredBanner(null);
           toast.success(`"${resource.name}" connected.`);
+
+          // Read-only refresh of connection metadata so backend-recorded last_synced_at stays current
+          void getGoogleWorkspaceIntegrationConnections({
+            workspaceId: outcome.workspaceId || effectiveWorkspaceId,
+            agentId,
+          })
+            .then(({ connectionsByService: freshMap }) => {
+              applyConnectionsToParent(freshMap);
+            })
+            .catch(() => {
+              // Non-blocking: document sync already succeeded
+            });
         } else if (classifiedError) {
           const stageSuffix = classifiedError.stage
             ? ` [stage: ${classifiedError.stage}]`
@@ -740,6 +752,7 @@ export const GoogleDocsKnowledgeSection: React.FC<GoogleDocsKnowledgeSectionProp
       agentId,
       syncingResourceIds,
       refreshSyncedGoogleDocs,
+      applyConnectionsToParent,
     ]
   );
 

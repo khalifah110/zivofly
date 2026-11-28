@@ -3833,7 +3833,7 @@ function mapIntegrationConnectionRow(
         : typeof meta.error === 'string' && meta.error.trim()
         ? meta.error.trim()
         : null,
-    last_synced_at: row.last_synced_at || row.updated_at || null,
+    last_synced_at: row.last_synced_at || null,
     metadata: meta,
     created_at: row.created_at || new Date().toISOString(),
     updated_at: row.updated_at || row.created_at || new Date().toISOString(),
@@ -4033,7 +4033,7 @@ export function syncGoogleWorkspaceConfigWithRecords(
       connectionId: rec.id,
       lastError: rec.last_error,
       connectedAt: rec.created_at,
-      lastSyncedAt: rec.last_synced_at || rec.updated_at,
+      lastSyncedAt: rec.last_synced_at || undefined,
     };
   };
 
@@ -4074,9 +4074,7 @@ export function syncGoogleWorkspaceConfigWithRecords(
       connectedAt: isSheetsDisconnected ? undefined : sheetsRecord?.created_at,
       lastSyncedAt: isSheetsDisconnected
         ? existingSheets.lastSyncedAt
-        : sheetsRecord?.last_synced_at ||
-          sheetsRecord?.updated_at ||
-          existingSheets.lastSyncedAt,
+        : sheetsRecord?.last_synced_at || undefined,
       selectedResourceIds: !isSheetsDisconnected
         ? currentConfig?.sheets?.selectedResourceIds
         : undefined,
